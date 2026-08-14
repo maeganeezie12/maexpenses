@@ -156,6 +156,23 @@ def get_out_rows() -> list:
     return result.get("values", [])
 
 
+def get_in_rows() -> list:
+    """Raw (unformatted) date-serial/income/desc rows from the 'in' tab, header excluded."""
+    last_row = _next_row(IN_SHEET_NAME) - 1
+    if last_row < 2:
+        return []
+    result = (
+        _sheets.values()
+        .get(
+            spreadsheetId=SPREADSHEET_ID,
+            range=f"{IN_SHEET_NAME}!A2:C{last_row}",
+            valueRenderOption="UNFORMATTED_VALUE",
+        )
+        .execute()
+    )
+    return result.get("values", [])
+
+
 def _is_red(color: dict) -> bool:
     if not color:
         return False

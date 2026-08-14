@@ -6,7 +6,13 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto
 from telegram.ext import ContextTypes
 
 import sheets
-from analytics import build_summary, has_investment_this_month, render_spending_by_month
+from analytics import (
+    build_summary,
+    has_investment_this_month,
+    render_history_chart,
+    render_net_income_chart,
+    render_spending_by_month,
+)
 from config import ALLOWED_USER_ID, CATEGORIES, OUT_SHEET_NAME
 from integrity import run_daily_check
 from llm import parse_expense, parse_income
@@ -37,11 +43,13 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Commands:\n"
         "/income — log income, e.g. /income 4118 salary\n"
         "/undo — remove the last entry you logged\n"
-        "/summary\\_d — today vs yesterday, by category, + last 7 days trend\n"
-        "/summary\\_w — week to date vs last full week, by category, + last 4 weeks trend\n"
-        "/summary\\_m — month to date vs last month, by category, + last 3 months trend\n"
-        "/summary\\_y — year-to-date spending by category\n"
-        "/spending — stacked bar chart of every category by month (last/this/next year or all time)\n"
+        "/summary\\_d — vs the same day last week, by category, + last 7 days trend by category\n"
+        "/summary\\_w — week to date vs last full week, by category, + last 4 weeks trend by category\n"
+        "/summary\\_m — month to date vs last month, by category, + last 3 months trend by category\n"
+        "/summary\\_y — year-to-date vs same period last year, by category\n"
+        "/spending — stacked bar chart of every category by month (this/last/next year or all time)\n"
+        "/history — total spending by day/week/month (this/last/next year or all time)\n"
+        "/net — net income by month, income minus expenses (this/last/next year or all time)\n"
         "/checksheet — check for missing dates, missing categories, or new automated rows\n"
         "/gsheet — get the link to the out sheet\n"
         "/whoami — show your Telegram user ID\n"
@@ -172,20 +180,25 @@ async def summary_y_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await _summary(update, "y")
 
 
-def _spending_keyboard(today):
+def _year_option_keyboard(prefix: str, today, include_all: bool = True):
+    """This Year / Last Year / Next Year / (All Time) — the standard order for
+    every timeline-range picker in the bot."""
     buttons = [
-        [InlineKeyboardButton(f"Last Year ({today.year - 1})", callback_data="spend:last")],
-        [InlineKeyboardButton(f"This Year ({today.year})", callback_data="spend:this")],
-        [InlineKeyboardButton(f"Next Year ({today.year + 1})", callback_data="spend:next")],
-        [InlineKeyboardButton("All Time", callback_data="spend:all")],
+        [InlineKeyboardButton(f"This Year ({today.year})", callback_data=f"{prefix}:this")],
+        [InlineKeyboardButton(f"Last Year ({today.year - 1})", callback_data=f"{prefix}:last")],
+        [InlineKeyboardButton(f"Next Year ({today.year + 1})", callback_data=f"{prefix}:next")],
     ]
+    if include_all:
+        buttons.append([InlineKeyboardButton("All Time", callback_data=f"{prefix}:all")])
     return InlineKeyboardMarkup(buttons)
 
 
 async def spending_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not _authorized(update):
         return
-    await update.message.reply_text("Spending by category, by month — pick a range:", reply_markup=_spending_keyboard(today_local()))
+    await update.message.reply_text(
+        "Spending by category, by month — pick a range:", reply_markup=_year_option_keyboard("spend", today_local())
+    )
 
 
 async def spending_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -201,6 +214,77 @@ async def spending_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_photo(photo=chart)
     else:
         await query.message.reply_text("No expense data for that range.")
+
+
+def _history_granularity_keyboard():
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton("Day", callback_data="histgran:day"),
+                InlineKeyboardButton("Week", callback_data="histgran:week"),
+                InlineKeyboardButton("Month", callback_data="histgran:month"),
+            ]
+        ]
+    )
+
+
+async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not _authorized(update):
+        return
+    await update.message.reply_text("Total spending history — choose a granularity:", reply_markup=_history_granularity_keyboard())
+
+
+async def history_granularity_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    if not _authorized(update):
+        await query.answer()
+        return
+
+    await query.answer()
+    _, granularity = query.data.split(":", 1)
+    await query.edit_message_text(
+        f"Granularity: {granularity}. Now pick a range:",
+        reply_markup=_year_option_keyboard(f"histyear:{granularity}", today_local()),
+    )
+
+
+async def history_year_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    if not _authorized(update):
+        await query.answer()
+        return
+
+    await query.answer()
+    _, granularity, option = query.data.split(":", 2)
+    chart = render_history_chart(granularity, option, today_local())
+    if chart:
+        await query.message.reply_photo(photo=chart)
+    else:
+        await query.message.reply_text("No expense data for that range.")
+
+
+async def net_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not _authorized(update):
+        return
+    await update.message.reply_text(
+        "Net income by month (income minus expenses) — pick a range:",
+        reply_markup=_year_option_keyboard("net", today_local()),
+    )
+
+
+async def net_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    if not _authorized(update):
+        await query.answer()
+        return
+
+    await query.answer()
+    _, option = query.data.split(":", 1)
+    chart = render_net_income_chart(option, today_local())
+    if chart:
+        await query.message.reply_photo(photo=chart)
+    else:
+        await query.message.reply_text("No income/expense data for that range.")
 
 
 def _describe_row(values: list) -> str:

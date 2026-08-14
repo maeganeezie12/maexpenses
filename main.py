@@ -20,8 +20,13 @@ from handlers import (
     checksheet_command,
     daily_check_job,
     gsheet_command,
+    history_command,
+    history_granularity_callback,
+    history_year_callback,
     income_command,
     log_message,
+    net_callback,
+    net_command,
     redack_callback,
     spending_callback,
     spending_command,
@@ -88,11 +93,16 @@ def main():
     app.add_handler(CommandHandler("summary_y", summary_y_command))
     app.add_handler(CommandHandler("checksheet", checksheet_command))
     app.add_handler(CommandHandler("spending", spending_command))
+    app.add_handler(CommandHandler("history", history_command))
+    app.add_handler(CommandHandler("net", net_command))
     app.add_handler(CommandHandler("gsheet", gsheet_command))
 
     app.add_handler(CallbackQueryHandler(category_fix_callback, pattern=r"^cat:"))
     app.add_handler(CallbackQueryHandler(redack_callback, pattern=r"^redack:"))
     app.add_handler(CallbackQueryHandler(spending_callback, pattern=r"^spend:"))
+    app.add_handler(CallbackQueryHandler(history_granularity_callback, pattern=r"^histgran:"))
+    app.add_handler(CallbackQueryHandler(history_year_callback, pattern=r"^histyear:"))
+    app.add_handler(CallbackQueryHandler(net_callback, pattern=r"^net:"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, log_message))
 
     logger.info("Expense bot starting...")

@@ -30,18 +30,21 @@ _INK_PRIMARY = "#0b0b0b"
 _INK_SECONDARY = "#52514e"
 _GRIDLINE = "#e1e0d9"
 
-# Sequential blue ramp (single-hue, for the trend line + its area fill).
-_TREND_LINE = "#256abf"
-_TREND_FILL = "#cde2fb"
+# Single sequential hue for total-only (non-categorical) charts, e.g. /history.
+_SEQUENTIAL_HUE = "#2a78d6"
+
+# Status colors (fixed, never themed) for above/below-zero net-income points.
+_STATUS_GOOD = "#0ca30c"
+_STATUS_CRITICAL = "#d03b3b"
 
 _TREND_SPAN = {"d": (7, "last 7 days"), "w": (4, "last 4 weeks"), "m": (3, "last 3 months")}
 
-# Labels for the detailed previous-vs-current breakdown, shown only for d/w/m
-# (not y — the user asked for this on d/w/m specifically).
-_COMPARE_LABELS = {
-    "d": ("Yesterday", "Today"),
-    "w": ("Last full week", "Week to date"),
-    "m": ("Last month", "Month to date"),
+# Comparison phrasing for the narrative paragraph, keyed by period kind.
+_COMPARE_NARRATIVE = {
+    "d": "the same day last week",
+    "w": "last week",
+    "m": "last month",
+    "y": "the same period last year",
 }
 
 
@@ -68,6 +71,24 @@ def fetch_expenses() -> list:
     return expenses
 
 
+def fetch_income() -> list:
+    income = []
+    for row in sheets.get_in_rows():
+        if len(row) < 3 or row[0] == "":
+            continue
+        try:
+            income.append(
+                {
+                    "date": _serial_to_date(row[0]),
+                    "amount": float(row[1]),
+                    "description": str(row[2]),
+                }
+            )
+        except (ValueError, TypeError):
+            continue
+    return income
+
+
 def period_bounds(kind: str, today: date):
     if kind == "d":
         start = today
@@ -90,12 +111,13 @@ def _add_months(d: date, delta: int) -> date:
 
 
 def _previous_bounds(kind: str, start: date, end: date):
-    """The full immediately-preceding period — yesterday, last full week (Mon-Sun),
-    last full calendar month, or same date range last year — used as the
-    comparison baseline, regardless of how much of the current period has
-    elapsed. This deliberately compares "so far" against a complete period."""
+    """The comparison baseline for each period — same weekday last week (not
+    just yesterday, so a Friday compares to a Friday), last full week (Mon-Sun),
+    last full calendar month, or same date range last year — regardless of how
+    much of the current period has elapsed. This deliberately compares "so far"
+    against a complete, fairly-matched period."""
     if kind == "d":
-        prev = start - timedelta(days=1)
+        prev = start - timedelta(days=7)
         return prev, prev
 
     if kind == "w":
@@ -144,6 +166,44 @@ def _period_label(kind: str, start: date, end: date) -> str:
     return f"{end.year} (year to date)"
 
 
+def _category_change_phrase(cat: str, cur: float, prev: float) -> str:
+    if prev == 0 and cur > 0:
+        return f"{cat} is new this period"
+    if cur == 0 and prev > 0:
+        return f"{cat} dropped to zero (was ${prev:,.2f})"
+    pct = (cur - prev) / prev * 100
+    direction = "increased" if pct >= 0 else "decreased"
+    return f"{cat} {direction} by {abs(pct):.0f}%"
+
+
+def _join_phrases(phrases: list) -> str:
+    if len(phrases) == 1:
+        return phrases[0]
+    if len(phrases) == 2:
+        return f"{phrases[0]} and {phrases[1]}"
+    return f"{phrases[0]}, {phrases[1]}, and {phrases[2]}"
+
+
+def _build_comparison_narrative(kind: str, total: float, prev_total: float, totals: dict, prev_totals: dict):
+    label = _COMPARE_NARRATIVE.get(kind)
+    if not label or (total == 0 and prev_total == 0):
+        return None
+
+    if prev_total == 0:
+        sentence = f"Compared with {label}, this is all new spending (${total:,.2f})."
+    else:
+        pct = (total - prev_total) / prev_total * 100
+        direction = "up" if pct >= 0 else "down"
+        sentence = f"Compared with {label}, spending is {direction} {abs(pct):.0f}%."
+
+    top3 = sorted(totals.items(), key=lambda kv: kv[1], reverse=True)[:3]
+    phrases = [_category_change_phrase(cat, cur, prev_totals.get(cat, 0.0)) for cat, cur in top3]
+    if phrases:
+        sentence += f" {_join_phrases(phrases)}."
+
+    return sentence
+
+
 def build_insights(kind: str, filtered: list, totals: dict, prev_filtered: list, start: date, end: date) -> str:
     label = _period_label(kind, start, end)
     total = sum(totals.values())
@@ -154,42 +214,20 @@ def build_insights(kind: str, filtered: list, totals: dict, prev_filtered: list,
         lines.append("No expenses logged for this period or the previous one.")
         return "\n".join(lines)
 
-    lines.append(f"Total: ${total:,.2f} across {len(filtered)} transaction{'s' if len(filtered) != 1 else ''}")
+    lines.append(f"Total: ${total:,.2f}, {len(filtered)} transaction{'s' if len(filtered) != 1 else ''}")
 
-    compare = _COMPARE_LABELS.get(kind)
-    if compare:
-        prev_label, cur_label = compare
-        lines.append(f"{prev_label}: ${prev_total:,.2f}  |  {cur_label}: ${total:,.2f}")
-
-    if prev_total > 0:
-        pct = (total - prev_total) / prev_total * 100
-        direction = "up" if pct >= 0 else "down"
-        lines.append(f"Change: {direction} {abs(pct):.0f}%")
-    elif total > 0 and not compare:
-        lines.append(f"No spending in the previous {_PERIOD_LABELS[kind]} to compare against")
-
-    if filtered:
+    if totals:
         top_category, top_amount = max(totals.items(), key=lambda kv: kv[1])
         lines.append(f"Top category: {top_category} - ${top_amount:,.2f} ({top_amount / total * 100:.0f}% of total)")
 
-        biggest = max(filtered, key=lambda e: e["price"])
-        lines.append(
-            f"Biggest expense: {biggest['item']} - ${biggest['price']:,.2f} "
-            f"({biggest['category']}, {biggest['date'].strftime('%d %b')})"
-        )
+    if filtered and kind != "d":
+        days_elapsed = (end - start).days + 1
+        lines.append(f"Daily average: ${total / days_elapsed:,.2f}")
 
-        if kind != "d":
-            days_elapsed = (end - start).days + 1
-            lines.append(f"Daily average: ${total / days_elapsed:,.2f}")
-
-    if compare:
-        prev_totals = _totals_by_category(prev_filtered)
-        all_categories = sorted(set(totals) | set(prev_totals), key=lambda c: totals.get(c, 0), reverse=True)
-        if all_categories:
-            prev_label, cur_label = compare
-            lines.append(f"\nBy category ({cur_label.lower()} vs {prev_label.lower()}):")
-            for cat in all_categories:
-                lines.append(f"- {cat}: ${totals.get(cat, 0.0):,.2f} (was ${prev_totals.get(cat, 0.0):,.2f})")
+    narrative = _build_comparison_narrative(kind, total, prev_total, totals, _totals_by_category(prev_filtered))
+    if narrative:
+        lines.append("")
+        lines.append(narrative)
 
     return "\n".join(lines)
 
@@ -272,40 +310,67 @@ def _trend_buckets(kind: str, today: date):
     return buckets
 
 
-def render_trend_chart(kind: str, expenses: list, today: date):
-    if kind not in _TREND_SPAN:
+def _render_stacked_bar_chart(buckets: list, expenses: list, title: str):
+    """Stacked bar chart of category spend across the given (start, end, label)
+    buckets. Shared by the trend charts (day/week/month buckets) and /spending
+    (month buckets). Returns None if there's no data across the whole window.
+    """
+    labels = [b[2] for b in buckets]
+    windowed = _filter(expenses, buckets[0][0], buckets[-1][1])
+    totals_overall = _totals_by_category(windowed)
+    if not totals_overall:
         return None
 
-    _, span_label = _TREND_SPAN[kind]
-    buckets = _trend_buckets(kind, today)
-    labels = [b[2] for b in buckets]
-    totals = [sum(e["price"] for e in expenses if b[0] <= e["date"] <= b[1]) for b in buckets]
+    ranked = sorted(totals_overall.items(), key=lambda kv: kv[1], reverse=True)
+    top_cats = [c for c, _ in ranked[:_MAX_SLICES]]
+    has_other = len(ranked) > _MAX_SLICES
 
-    # Kept brief by design: a compact sparkline-style chart, no per-point value
-    # labels — the detailed numbers already live in the insights text.
-    fig, ax = plt.subplots(figsize=(5, 2), dpi=150)
+    series = {cat: [] for cat in top_cats}
+    if has_other:
+        series["Other"] = []
+
+    for b_start, b_end, _ in buckets:
+        bucket_totals = _totals_by_category(_filter(expenses, b_start, b_end))
+        for cat in top_cats:
+            series[cat].append(bucket_totals.get(cat, 0.0))
+        if has_other:
+            series["Other"].append(sum(v for c, v in bucket_totals.items() if c not in top_cats))
+
+    many = len(labels) > 12
+    width = min(20, max(5, len(labels) * 0.5))
+    fig, ax = plt.subplots(figsize=(width, 4), dpi=150)
     fig.patch.set_facecolor(_SURFACE)
     ax.set_facecolor(_SURFACE)
 
     x = range(len(labels))
-    ax.plot(x, totals, color=_TREND_LINE, linewidth=2, marker="o", markersize=4, zorder=3)
-    ax.fill_between(x, totals, color=_TREND_FILL, alpha=0.6, zorder=1)
+    bottom = [0.0] * len(labels)
+    for cat, amounts in series.items():
+        ax.bar(x, amounts, bottom=bottom, color=_CATEGORY_COLOR.get(cat, _OTHER_COLOR), label=cat, width=0.6)
+        bottom = [b + v for b, v in zip(bottom, amounts)]
 
     ax.set_xticks(list(x))
-    ax.set_xticklabels(labels, color=_INK_SECONDARY, fontsize=8)
-    ax.set_ylim(bottom=0)
-    ax.set_yticks([])
-    for spine in ("top", "right", "left"):
+    ax.set_xticklabels(labels, color=_INK_SECONDARY, fontsize=8, rotation=45 if many else 0, ha="right" if many else "center")
+    ax.tick_params(axis="y", colors=_INK_SECONDARY, labelsize=8)
+    for spine in ("top", "right"):
         ax.spines[spine].set_visible(False)
     ax.spines["bottom"].set_color(_GRIDLINE)
-    ax.tick_params(axis="both", length=0)
-    ax.set_title(f"Trend — {span_label}", color=_INK_PRIMARY, fontsize=10, pad=8)
+    ax.spines["left"].set_color(_GRIDLINE)
+    ax.legend(loc="upper left", bbox_to_anchor=(1.0, 1.0), frameon=False, labelcolor=_INK_PRIMARY, fontsize=7)
+    ax.set_title(title, color=_INK_PRIMARY, fontsize=11, pad=10)
 
     buf = io.BytesIO()
     fig.savefig(buf, format="png", bbox_inches="tight", facecolor=_SURFACE)
     plt.close(fig)
     buf.seek(0)
     return buf
+
+
+def render_trend_chart(kind: str, expenses: list, today: date):
+    if kind not in _TREND_SPAN:
+        return None
+    _, span_label = _TREND_SPAN[kind]
+    buckets = _trend_buckets(kind, today)
+    return _render_stacked_bar_chart(buckets, expenses, f"Trend by category — {span_label}")
 
 
 def render_spending_by_month(option: str, today: date):
@@ -333,53 +398,161 @@ def render_spending_by_month(option: str, today: date):
         months.append(cur)
         cur = _add_months(cur, 1)
 
-    window_end = _add_months(months[-1], 1) - timedelta(days=1)
-    windowed = _filter(expenses, months[0], window_end)
-    totals_overall = _totals_by_category(windowed)
-    if not totals_overall:
+    many_months = len(months) > 12
+    buckets = [
+        (m, _add_months(m, 1) - timedelta(days=1), m.strftime("%b %y") if many_months else m.strftime("%b"))
+        for m in months
+    ]
+    return _render_stacked_bar_chart(buckets, expenses, title)
+
+
+def _range_buckets(granularity: str, start: date, end: date, spans_years: bool):
+    buckets = []
+
+    if granularity == "month":
+        cur = start.replace(day=1)
+        end_month = end.replace(day=1)
+        label_fmt = "%b %y" if spans_years else "%b"
+        while cur <= end_month:
+            buckets.append((cur, _add_months(cur, 1) - timedelta(days=1), cur.strftime(label_fmt)))
+            cur = _add_months(cur, 1)
+
+    elif granularity == "week":
+        cur = start - timedelta(days=start.weekday())  # Monday on/before start
+        while cur <= end:
+            buckets.append((cur, cur + timedelta(days=6), cur.strftime("%d %b %y" if spans_years else "%d %b")))
+            cur += timedelta(days=7)
+
+    elif granularity == "day":
+        cur = start
+        while cur <= end:
+            buckets.append((cur, cur, cur.strftime("%d %b")))
+            cur += timedelta(days=1)
+
+    else:
+        raise ValueError(f"unknown granularity: {granularity}")
+
+    return buckets
+
+
+def _resolve_year_option(option: str, today: date, all_time_dates: list):
+    """Returns (start, end, label, spans_years) for a this/last/next/all picker."""
+    if option == "all":
+        if not all_time_dates:
+            return None
+        start = min(all_time_dates).replace(day=1)
+        end = max(max(all_time_dates), today)
+        return start, end, "all time", start.year != end.year
+
+    year = {"this": today.year, "last": today.year - 1, "next": today.year + 1}[option]
+    return date(year, 1, 1), date(year, 12, 31), str(year), False
+
+
+def render_history_chart(granularity: str, year_option: str, today: date):
+    """Total-spending-only (not broken down by category) chart, bucketed by
+    day/week/month, for this/last/next year or all time. None if no data."""
+    expenses = fetch_expenses()
+    resolved = _resolve_year_option(year_option, today, [e["date"] for e in expenses])
+    if not resolved:
+        return None
+    start, end, label, spans_years = resolved
+
+    buckets = _range_buckets(granularity, start, end, spans_years)
+    totals = [sum(e["price"] for e in expenses if b[0] <= e["date"] <= b[1]) for b in buckets]
+    if not any(totals):
         return None
 
-    ranked = sorted(totals_overall.items(), key=lambda kv: kv[1], reverse=True)
-    top_cats = [c for c, _ in ranked[:_MAX_SLICES]]
-    has_other = len(ranked) > _MAX_SLICES
+    title = f"Total spending by {granularity} — {label}"
 
-    series = {cat: [] for cat in top_cats}
-    if has_other:
-        series["Other"] = []
+    if granularity == "day":
+        fig, ax = plt.subplots(figsize=(max(12, len(buckets) * 0.05), 4), dpi=150)
+        fig.patch.set_facecolor(_SURFACE)
+        ax.set_facecolor(_SURFACE)
+        x = range(len(buckets))
+        ax.plot(x, totals, color=_SEQUENTIAL_HUE, linewidth=1.5)
+        ax.fill_between(x, totals, color=_SEQUENTIAL_HUE, alpha=0.15)
+        month_starts = [i for i, (b_start, _, _) in enumerate(buckets) if b_start.day == 1]
+        tick_fmt = "%b %y" if spans_years else "%b"
+        ax.set_xticks(month_starts)
+        ax.set_xticklabels([buckets[i][0].strftime(tick_fmt) for i in month_starts], color=_INK_SECONDARY, fontsize=8)
+    else:
+        many = len(buckets) > 12
+        width = min(20, max(6, len(buckets) * 0.35))
+        fig, ax = plt.subplots(figsize=(width, 4), dpi=150)
+        fig.patch.set_facecolor(_SURFACE)
+        ax.set_facecolor(_SURFACE)
+        x = range(len(buckets))
+        ax.bar(x, totals, color=_SEQUENTIAL_HUE, width=0.7)
+        ax.set_xticks(list(x))
+        ax.set_xticklabels(
+            [b[2] for b in buckets], color=_INK_SECONDARY, fontsize=8,
+            rotation=45 if many else 0, ha="right" if many else "center",
+        )
 
-    for m_start in months:
-        m_end = _add_months(m_start, 1) - timedelta(days=1)
-        month_totals = _totals_by_category(_filter(expenses, m_start, m_end))
-        for cat in top_cats:
-            series[cat].append(month_totals.get(cat, 0.0))
-        if has_other:
-            series["Other"].append(sum(v for c, v in month_totals.items() if c not in top_cats))
-
-    many_months = len(months) > 12
-    labels = [m.strftime("%b %y") if many_months else m.strftime("%b") for m in months]
-
-    width = min(20, max(6, len(months) * 0.4))
-    fig, ax = plt.subplots(figsize=(width, 5), dpi=150)
-    fig.patch.set_facecolor(_SURFACE)
-    ax.set_facecolor(_SURFACE)
-
-    x = range(len(labels))
-    bottom = [0.0] * len(labels)
-    for cat, amounts in series.items():
-        ax.bar(x, amounts, bottom=bottom, color=_CATEGORY_COLOR.get(cat, _OTHER_COLOR), label=cat, width=0.6)
-        bottom = [b + v for b, v in zip(bottom, amounts)]
-
-    ax.set_xticks(list(x))
-    ax.set_xticklabels(
-        labels, color=_INK_SECONDARY, fontsize=8, rotation=45 if many_months else 0, ha="right" if many_months else "center"
-    )
     ax.tick_params(axis="y", colors=_INK_SECONDARY, labelsize=8)
     for spine in ("top", "right"):
         ax.spines[spine].set_visible(False)
     ax.spines["bottom"].set_color(_GRIDLINE)
     ax.spines["left"].set_color(_GRIDLINE)
-    ax.legend(loc="upper left", bbox_to_anchor=(1.0, 1.0), frameon=False, labelcolor=_INK_PRIMARY, fontsize=8)
-    ax.set_title(title, color=_INK_PRIMARY, fontsize=12, pad=12)
+    ax.set_title(title, color=_INK_PRIMARY, fontsize=11, pad=10)
+
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", bbox_inches="tight", facecolor=_SURFACE)
+    plt.close(fig)
+    buf.seek(0)
+    return buf
+
+
+def render_net_income_chart(option: str, today: date):
+    """Line chart of net income (in-sheet income minus out-sheet expenses) per
+    month, for this/last/next year or all time. None if there's no data."""
+    expenses = fetch_expenses()
+    income = fetch_income()
+    all_dates = [e["date"] for e in expenses] + [i["date"] for i in income]
+    resolved = _resolve_year_option(option, today, all_dates)
+    if not resolved:
+        return None
+    start, end, label, spans_years = resolved
+
+    months = []
+    cur = start.replace(day=1)
+    end_month = end.replace(day=1)
+    while cur <= end_month:
+        months.append(cur)
+        cur = _add_months(cur, 1)
+
+    net_values = []
+    for m_start in months:
+        m_end = _add_months(m_start, 1) - timedelta(days=1)
+        inc_total = sum(i["amount"] for i in income if m_start <= i["date"] <= m_end)
+        exp_total = sum(e["price"] for e in expenses if m_start <= e["date"] <= m_end)
+        net_values.append(inc_total - exp_total)
+
+    if not any(net_values):
+        return None
+
+    labels = [m.strftime("%b %y") if spans_years else m.strftime("%b") for m in months]
+    many = len(months) > 12
+    width = min(20, max(6, len(months) * 0.4))
+
+    fig, ax = plt.subplots(figsize=(width, 4), dpi=150)
+    fig.patch.set_facecolor(_SURFACE)
+    ax.set_facecolor(_SURFACE)
+
+    x = range(len(labels))
+    ax.axhline(0, color=_GRIDLINE, linewidth=1, zorder=1)
+    ax.plot(x, net_values, color=_INK_SECONDARY, linewidth=1.5, zorder=2)
+    point_colors = [_STATUS_GOOD if v >= 0 else _STATUS_CRITICAL for v in net_values]
+    ax.scatter(x, net_values, color=point_colors, zorder=3, s=28)
+
+    ax.set_xticks(list(x))
+    ax.set_xticklabels(labels, color=_INK_SECONDARY, fontsize=8, rotation=45 if many else 0, ha="right" if many else "center")
+    ax.tick_params(axis="y", colors=_INK_SECONDARY, labelsize=8)
+    for spine in ("top", "right"):
+        ax.spines[spine].set_visible(False)
+    ax.spines["bottom"].set_color(_GRIDLINE)
+    ax.spines["left"].set_color(_GRIDLINE)
+    ax.set_title(f"Net income by month — {label}", color=_INK_PRIMARY, fontsize=11, pad=10)
 
     buf = io.BytesIO()
     fig.savefig(buf, format="png", bbox_inches="tight", facecolor=_SURFACE)
