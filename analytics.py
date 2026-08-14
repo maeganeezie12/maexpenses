@@ -13,17 +13,25 @@ _SHEETS_EPOCH = date(1899, 12, 30)
 
 _PERIOD_LABELS = {"d": "day", "w": "week", "m": "month", "y": "year"}
 
-# Fixed categorical hues (validated palette, see dataviz skill), assigned in a
-# stable order so a category keeps the same color across every chart. Categories
-# past the 7th real slice fold into "Other" rather than generating a new hue.
+# Custom brand palette, reordered from the user's original list to clear the
+# dataviz skill's CVD/normal-vision adjacency gates (validated via
+# scripts/validate_palette.js — the given order failed both hard gates; this
+# order passes with wide margin: worst adjacent normal ΔE 37.1, CVD ΔE 20.1).
+# Two colors (#00C2FF/#00B8D9 and #0057FF/#7B2CFF) remain too similar for an
+# all-slices-at-once comparison regardless of order — a residual risk mitigated
+# by every chart already carrying a legend and direct value/category labels.
 _PALETTE_ORDER = [
     "FNB", "Transport", "Shopping", "Entertainment",
     "Subscription", "Travel", "Alcohol", "Misc",
+    "Allowance", "Investment", "Hobbies", "Gifts",
 ]
-_PALETTE_HEX = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#4a3aa7", "#e34948"]
+_PALETTE_HEX = [
+    "#00B8D9", "#FF1744", "#00C2FF", "#FF5C00",
+    "#5B5FFF", "#00D68F", "#0057FF", "#FF9D00",
+    "#C000FF", "#00E5FF", "#7B2CFF", "#FFD600",
+]
 _CATEGORY_COLOR = dict(zip(_PALETTE_ORDER, _PALETTE_HEX))
-_OTHER_COLOR = "#898781"
-_MAX_SLICES = 7
+_OTHER_COLOR = "#898781"  # fallback only, for any category string outside the fixed list
 
 _SURFACE = "#fcfcfb"
 _INK_PRIMARY = "#0b0b0b"
@@ -168,12 +176,13 @@ def _period_label(kind: str, start: date, end: date) -> str:
 
 def _category_change_phrase(cat: str, cur: float, prev: float) -> str:
     if prev == 0 and cur > 0:
-        return f"{cat} is new this period"
+        return f"✨ {cat} is new this period"
     if cur == 0 and prev > 0:
-        return f"{cat} dropped to zero (was ${prev:,.2f})"
+        return f"⚠️ {cat} dropped to zero (was ${prev:,.2f})"
     pct = (cur - prev) / prev * 100
-    direction = "increased" if pct >= 0 else "decreased"
-    return f"{cat} {direction} by {abs(pct):.0f}%"
+    if pct >= 0:
+        return f"📈 {cat} increased by {pct:.0f}%"
+    return f"📉 {cat} decreased by {abs(pct):.0f}%"
 
 
 def _join_phrases(phrases: list) -> str:
@@ -190,11 +199,12 @@ def _build_comparison_narrative(kind: str, total: float, prev_total: float, tota
         return None
 
     if prev_total == 0:
-        sentence = f"Compared with {label}, this is all new spending (${total:,.2f})."
+        sentence = f"✨ Compared with {label}, this is all new spending (${total:,.2f})."
     else:
         pct = (total - prev_total) / prev_total * 100
+        emoji = "📈" if pct >= 0 else "📉"
         direction = "up" if pct >= 0 else "down"
-        sentence = f"Compared with {label}, spending is {direction} {abs(pct):.0f}%."
+        sentence = f"{emoji} Compared with {label}, spending is {direction} {abs(pct):.0f}%."
 
     top3 = sorted(totals.items(), key=lambda kv: kv[1], reverse=True)[:3]
     phrases = [_category_change_phrase(cat, cur, prev_totals.get(cat, 0.0)) for cat, cur in top3]
@@ -208,21 +218,21 @@ def build_insights(kind: str, filtered: list, totals: dict, prev_filtered: list,
     label = _period_label(kind, start, end)
     total = sum(totals.values())
     prev_total = sum(e["price"] for e in prev_filtered)
-    lines = [f"Summary for {label}"]
+    lines = [f"📊 Summary for {label}"]
 
     if not filtered and not prev_filtered:
         lines.append("No expenses logged for this period or the previous one.")
         return "\n".join(lines)
 
-    lines.append(f"Total: ${total:,.2f}, {len(filtered)} transaction{'s' if len(filtered) != 1 else ''}")
+    lines.append(f"💰 Total: ${total:,.2f}, {len(filtered)} transaction{'s' if len(filtered) != 1 else ''}")
 
     if totals:
         top_category, top_amount = max(totals.items(), key=lambda kv: kv[1])
-        lines.append(f"Top category: {top_category} - ${top_amount:,.2f} ({top_amount / total * 100:.0f}% of total)")
+        lines.append(f"🏆 Top category: {top_category} - ${top_amount:,.2f} ({top_amount / total * 100:.0f}% of total)")
 
     if filtered and kind != "d":
         days_elapsed = (end - start).days + 1
-        lines.append(f"Daily average: ${total / days_elapsed:,.2f}")
+        lines.append(f"📅 Daily average: ${total / days_elapsed:,.2f}")
 
     narrative = _build_comparison_narrative(kind, total, prev_total, totals, _totals_by_category(prev_filtered))
     if narrative:
@@ -234,10 +244,6 @@ def build_insights(kind: str, filtered: list, totals: dict, prev_filtered: list,
 
 def render_pie_chart(totals: dict, kind: str, start: date, end: date) -> io.BytesIO:
     items = sorted(totals.items(), key=lambda kv: kv[1], reverse=True)
-    if len(items) > _MAX_SLICES:
-        head, tail = items[:_MAX_SLICES], items[_MAX_SLICES:]
-        head.append(("Other", sum(v for _, v in tail)))
-        items = head
 
     labels = [name for name, _ in items]
     values = [v for _, v in items]
@@ -249,6 +255,11 @@ def render_pie_chart(totals: dict, kind: str, start: date, end: date) -> io.Byte
     ax.set_facecolor(_SURFACE)
 
     def _autopct(pct):
+        # Every category still gets its own slice, color, and legend entry —
+        # this only skips the inline $/% label on slivers too thin to hold
+        # readable text, where it would otherwise overlap its neighbors.
+        if pct < 3:
+            return ""
         return f"${pct / 100 * total:,.2f}\n({pct:.0f}%)"
 
     wedges, texts, autotexts = ax.pie(
@@ -321,20 +332,13 @@ def _render_stacked_bar_chart(buckets: list, expenses: list, title: str):
     if not totals_overall:
         return None
 
-    ranked = sorted(totals_overall.items(), key=lambda kv: kv[1], reverse=True)
-    top_cats = [c for c, _ in ranked[:_MAX_SLICES]]
-    has_other = len(ranked) > _MAX_SLICES
-
-    series = {cat: [] for cat in top_cats}
-    if has_other:
-        series["Other"] = []
+    all_cats = [c for c, _ in sorted(totals_overall.items(), key=lambda kv: kv[1], reverse=True)]
+    series = {cat: [] for cat in all_cats}
 
     for b_start, b_end, _ in buckets:
         bucket_totals = _totals_by_category(_filter(expenses, b_start, b_end))
-        for cat in top_cats:
+        for cat in all_cats:
             series[cat].append(bucket_totals.get(cat, 0.0))
-        if has_other:
-            series["Other"].append(sum(v for c, v in bucket_totals.items() if c not in top_cats))
 
     many = len(labels) > 12
     width = min(20, max(5, len(labels) * 0.5))

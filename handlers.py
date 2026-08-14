@@ -161,7 +161,7 @@ async def weekly_summary_job(context: ContextTypes.DEFAULT_TYPE):
     async def send_media_group(media):
         await context.bot.send_media_group(chat_id=ALLOWED_USER_ID, media=media)
 
-    await _send_summary(send_text, send_photo, send_media_group, pie_chart, trend_chart, f"Weekly recap\n\n{insights}")
+    await _send_summary(send_text, send_photo, send_media_group, pie_chart, trend_chart, f"🗓️ Weekly recap\n\n{insights}")
 
 
 async def summary_d_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
