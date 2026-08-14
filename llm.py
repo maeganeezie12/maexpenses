@@ -175,7 +175,7 @@ async def parse_income(text: str, today: date_type):
                 config=types.GenerateContentConfig(
                     system_instruction=(
                         f"Today's date is {today.isoformat()} ({today.strftime('%A')}). "
-                        "The user is logging personal income in free text, e.g. '4118 salary'. "
+                        "The user is logging personal income in free text, e.g. '1221 salary'. "
                         "Extract: date (YYYY-MM-DD if a date/day is mentioned, else null), "
                         "amount (the amount received, as a positive number), "
                         "and description (free text describing the income source)."

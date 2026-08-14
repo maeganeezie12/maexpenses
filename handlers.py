@@ -39,9 +39,9 @@ def _category_keyboard(row: int):
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "Send me an expense like `3.9 lunch` and I'll log it to the *out* sheet.\n"
-        "Send /income 4118 salary to log income to the *in* sheet.\n\n"
+        "Send /income 1221 salary to log income to the *in* sheet.\n\n"
         "Commands:\n"
-        "/income — log income, e.g. /income 4118 salary\n"
+        "/income — log income, e.g. /income 1221 salary\n"
         "/undo — remove the last entry you logged\n"
         "/summary\\_d — vs the same day last week, by category, + last 7 days trend by category\n"
         "/summary\\_w — week to date vs last full week, by category, + last 4 weeks trend by category\n"
@@ -87,7 +87,7 @@ async def income_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     text = " ".join(context.args).strip()
     if not text:
-        await update.message.reply_text("Usage: /income 4118 salary")
+        await update.message.reply_text("Usage: /income 1221 salary")
         return
 
     today = today_local()
