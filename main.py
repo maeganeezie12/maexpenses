@@ -40,7 +40,7 @@ from handlers import (
     whoami_command,
 )
 
-_MONDAY = (1,)  # PTB v20+ JobQueue.run_daily: 0=Sunday .. 6=Saturday
+_SUNDAY = (0,)  # PTB v20+ JobQueue.run_daily: 0=Sunday .. 6=Saturday
 
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
@@ -73,9 +73,9 @@ async def post_init(application):
     logger.info("Daily sheet check scheduled for %02d:%02d %s", DAILY_CHECK_HOUR, DAILY_CHECK_MINUTE, TIMEZONE)
 
     weekly_time = time_type(hour=WEEKLY_SUMMARY_HOUR, minute=WEEKLY_SUMMARY_MINUTE, tzinfo=tz)
-    application.job_queue.run_daily(weekly_summary_job, time=weekly_time, days=_MONDAY, name="weekly_summary")
+    application.job_queue.run_daily(weekly_summary_job, time=weekly_time, days=_SUNDAY, name="weekly_summary")
     logger.info(
-        "Weekly summary scheduled for Mondays %02d:%02d %s", WEEKLY_SUMMARY_HOUR, WEEKLY_SUMMARY_MINUTE, TIMEZONE
+        "Weekly summary scheduled for Sundays %02d:%02d %s", WEEKLY_SUMMARY_HOUR, WEEKLY_SUMMARY_MINUTE, TIMEZONE
     )
 
 

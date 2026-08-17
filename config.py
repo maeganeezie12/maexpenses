@@ -16,8 +16,8 @@ IN_SHEET_NAME = os.getenv("IN_SHEET_NAME", "in")
 TIMEZONE = "Asia/Singapore"
 DAILY_CHECK_HOUR = int(os.getenv("DAILY_CHECK_HOUR") or "9")
 DAILY_CHECK_MINUTE = int(os.getenv("DAILY_CHECK_MINUTE") or "0")
-WEEKLY_SUMMARY_HOUR = int(os.getenv("WEEKLY_SUMMARY_HOUR") or "9")
-WEEKLY_SUMMARY_MINUTE = int(os.getenv("WEEKLY_SUMMARY_MINUTE") or "5")
+WEEKLY_SUMMARY_HOUR = int(os.getenv("WEEKLY_SUMMARY_HOUR") or "23")
+WEEKLY_SUMMARY_MINUTE = int(os.getenv("WEEKLY_SUMMARY_MINUTE") or "50")
 
 CATEGORIES = [
     "Travel",

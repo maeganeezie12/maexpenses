@@ -149,7 +149,7 @@ async def weekly_summary_job(context: ContextTypes.DEFAULT_TYPE):
         return
 
     today = today_local()
-    last_sunday = today - timedelta(days=today.weekday() + 1)  # most recent Sunday before this week
+    last_sunday = today - timedelta(days=(today.weekday() + 1) % 7)  # most recent Sunday on/before today
     pie_chart, trend_chart, insights = build_summary("w", last_sunday)
 
     async def send_text(text):
