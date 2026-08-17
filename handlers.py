@@ -46,7 +46,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/day — vs yesterday, by category, + last 7 days trend by category\n"
         "/week — week to date vs same days last week, by category, + last 4 weeks trend by category\n"
         "/month — month to date vs same days last month, by category, + last 3 months trend by category\n"
-        "/summary\\_y — year-to-date vs same period last year, by category\n"
+        "/year — year-to-date vs same period last year, by category\n"
         "/spending — stacked bar chart of every category by month (this/last/next year or all time)\n"
         "/history — total spending by day/week/month (this/last/next year or all time)\n"
         "/net — net income by month, income minus expenses (this/last/next year or all time)\n"

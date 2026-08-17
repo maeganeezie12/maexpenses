@@ -90,7 +90,7 @@ def main():
     app.add_handler(CommandHandler("day", summary_d_command))
     app.add_handler(CommandHandler("week", summary_w_command))
     app.add_handler(CommandHandler("month", summary_m_command))
-    app.add_handler(CommandHandler("summary_y", summary_y_command))
+    app.add_handler(CommandHandler("year", summary_y_command))
     app.add_handler(CommandHandler("checksheet", checksheet_command))
     app.add_handler(CommandHandler("spending", spending_command))
     app.add_handler(CommandHandler("history", history_command))
