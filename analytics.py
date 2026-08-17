@@ -13,22 +13,23 @@ _SHEETS_EPOCH = date(1899, 12, 30)
 
 _PERIOD_LABELS = {"d": "day", "w": "week", "m": "month", "y": "year"}
 
-# Custom brand palette, reordered from the user's original list to clear the
-# dataviz skill's CVD/normal-vision adjacency gates (validated via
-# scripts/validate_palette.js — the given order failed both hard gates; this
-# order passes with wide margin: worst adjacent normal ΔE 37.1, CVD ΔE 20.1).
-# Two colors (#00C2FF/#00B8D9 and #0057FF/#7B2CFF) remain too similar for an
-# all-slices-at-once comparison regardless of order — a residual risk mitigated
-# by every chart already carrying a legend and direct value/category labels.
+# Custom brand palette (from two 18-color lists the user provided). Only 9
+# colors from each list passed the dataviz skill's per-color lightness/chroma
+# checks on their own (the rest were too pale, too dark, or too washed-out to
+# read as a distinct hue) — combining both clean sets of 9 gave enough range
+# to find a 12-color subset that clears every hard gate with wide margin
+# (worst adjacent normal ΔE 32.4, CVD ΔE 15.4), validated via
+# scripts/validate_palette.js. Dropped for being redundant with a kept color:
+# #968EF0, #B04A6F, #845EC2, #D65DB1, #008F7A, #926C00.
 _PALETTE_ORDER = [
     "FNB", "Transport", "Shopping", "Entertainment",
     "Subscription", "Travel", "Alcohol", "Misc",
     "Allowance", "Investment", "Hobbies", "Gifts",
 ]
 _PALETTE_HEX = [
-    "#00B8D9", "#FF1744", "#00C2FF", "#FF5C00",
-    "#5B5FFF", "#00D68F", "#0057FF", "#FF9D00",
-    "#C000FF", "#00E5FF", "#7B2CFF", "#FFD600",
+    "#36B09A", "#82355A", "#39C2C6", "#DD2768",
+    "#089BE5", "#CA1434", "#2C73D2", "#FF6F91",
+    "#3E7906", "#BB3BB0", "#00C9A7", "#C34A36",
 ]
 _CATEGORY_COLOR = dict(zip(_PALETTE_ORDER, _PALETTE_HEX))
 _OTHER_COLOR = "#898781"  # fallback only, for any category string outside the fixed list
