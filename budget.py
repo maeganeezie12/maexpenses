@@ -7,6 +7,7 @@ from datetime import date, timedelta
 import matplotlib
 
 matplotlib.use("Agg")
+import matplotlib.image as mpimg
 import matplotlib.pyplot as plt
 from matplotlib.patches import Circle, Rectangle
 
@@ -14,6 +15,11 @@ from analytics import fetch_expenses, fetch_income
 from config import CATEGORIES
 
 _STATE_FILE = os.path.join(os.path.dirname(__file__), "budget.json")
+
+# Decorative corner image for the budget chart — loaded once at import time
+# rather than per-render since it never changes.
+_LOGO_PATH = os.path.join(os.path.dirname(__file__), "assets", "mrkrabs.png")
+_LOGO_IMG = mpimg.imread(_LOGO_PATH) if os.path.exists(_LOGO_PATH) else None
 
 # Allowance (money given to parents each month) gets a fixed target carved
 # out of income up front — like the savings target — rather than a
@@ -259,7 +265,7 @@ def render_budget_chart(today: date):
     totals = _live_totals(state, today)
     category_budgets = totals["category_budgets"]
     used = _month_usage(today)
-    all_cats = sorted(set(category_budgets) | set(used), key=lambda c: category_budgets.get(c, 0.0), reverse=True)
+    all_cats = sorted(set(category_budgets) | set(used), key=lambda c: used.get(c, 0.0), reverse=True)
     if not all_cats:
         return None
 
@@ -297,11 +303,19 @@ def render_budget_chart(today: date):
         footer_lines = [f"Only ${total_remaining:,.2f} left in your overall budget this month — pace yourself."]
         footer_color = _STATUS_WARN_COLOR
 
+    logo_w_in = 1.3
+    logo_h_in = 0.0
+    logo_area_h = 0.0
+    if _LOGO_IMG is not None:
+        logo_h_in = logo_w_in * _LOGO_IMG.shape[0] / _LOGO_IMG.shape[1]
+        logo_area_h = logo_h_in + 0.15
+
     n = len(rows)
     fig_h = (
         _MARGIN_TOP + _TITLE_H + _INCOME_H + _ALLOWANCE_H + _SUMMARY_H + _GAP_BEFORE_HEADER + _COL_HEADER_H
         + _ROW_H * n + _GAP_BEFORE_TOTAL + _TOTAL_H
         + (_GAP_BEFORE_FOOTER + _FOOTER_LINE_H * len(footer_lines) if footer_lines else 0)
+        + logo_area_h
         + _MARGIN_BOTTOM
     )
 
@@ -396,6 +410,12 @@ def render_budget_chart(today: date):
         for line in footer_lines:
             _text(ax, _COL_CAT_X, y, line, fontsize=9, color=footer_color, va="top")
             y += _FOOTER_LINE_H
+
+    if _LOGO_IMG is not None:
+        y += 0.15
+        x1 = _FIG_W - 0.2
+        x0 = x1 - logo_w_in
+        ax.imshow(_LOGO_IMG, extent=(x0, x1, y + logo_h_in, y), zorder=1, aspect="auto")
 
     buf = io.BytesIO()
     fig.savefig(buf, format="png", facecolor=_SURFACE)
