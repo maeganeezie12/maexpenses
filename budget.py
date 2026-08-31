@@ -303,19 +303,11 @@ def render_budget_chart(today: date):
         footer_lines = [f"Only ${total_remaining:,.2f} left in your overall budget this month — pace yourself."]
         footer_color = _STATUS_WARN_COLOR
 
-    logo_w_in = 1.3
-    logo_h_in = 0.0
-    logo_area_h = 0.0
-    if _LOGO_IMG is not None:
-        logo_h_in = logo_w_in * _LOGO_IMG.shape[0] / _LOGO_IMG.shape[1]
-        logo_area_h = logo_h_in + 0.15
-
     n = len(rows)
     fig_h = (
         _MARGIN_TOP + _TITLE_H + _INCOME_H + _ALLOWANCE_H + _SUMMARY_H + _GAP_BEFORE_HEADER + _COL_HEADER_H
         + _ROW_H * n + _GAP_BEFORE_TOTAL + _TOTAL_H
         + (_GAP_BEFORE_FOOTER + _FOOTER_LINE_H * len(footer_lines) if footer_lines else 0)
-        + logo_area_h
         + _MARGIN_BOTTOM
     )
 
@@ -412,10 +404,17 @@ def render_budget_chart(today: date):
             y += _FOOTER_LINE_H
 
     if _LOGO_IMG is not None:
-        y += 0.15
-        x1 = _FIG_W - 0.2
+        # Anchored to the bottom-right corner of the figure (unchanged
+        # height) and layered on top of whatever's already there — a
+        # watermark-style overlay, not extra reserved space.
+        logo_w_in = 1.3
+        logo_h_in = logo_w_in * _LOGO_IMG.shape[0] / _LOGO_IMG.shape[1]
+        margin = 0.2
+        x1 = _FIG_W - margin
         x0 = x1 - logo_w_in
-        ax.imshow(_LOGO_IMG, extent=(x0, x1, y + logo_h_in, y), zorder=1, aspect="auto")
+        y1 = fig_h - margin
+        y0 = y1 - logo_h_in
+        ax.imshow(_LOGO_IMG, extent=(x0, x1, y1, y0), zorder=20, aspect="auto")
 
     buf = io.BytesIO()
     fig.savefig(buf, format="png", facecolor=_SURFACE)
