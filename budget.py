@@ -1,8 +1,16 @@
+import io
 import json
 import os
+import textwrap
 from datetime import date, timedelta
 
-from analytics import CATEGORY_EMOJI, OTHER_EMOJI, fetch_expenses, fetch_income
+import matplotlib
+
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+from matplotlib.patches import Circle, Rectangle
+
+from analytics import fetch_expenses, fetch_income
 from config import CATEGORIES
 
 _STATE_FILE = os.path.join(os.path.dirname(__file__), "budget.json")
@@ -13,9 +21,18 @@ _STATE_FILE = os.path.join(os.path.dirname(__file__), "budget.json")
 _EXCLUDE_FROM_BUDGET = {"Allowance"}
 _SPEND_CATEGORIES = [c for c in CATEGORIES if c not in _EXCLUDE_FROM_BUDGET]
 
-_STATUS_OVER = "🚨"
-_STATUS_WARN = "⚠️"
 _WARN_THRESHOLD = 0.9  # flag a category once 90% of its budget is used
+
+# Same brand palette as analytics.py's charts (kept local rather than
+# imported since these are plain drawing colors, not category-keyed data).
+_SURFACE = "#fcfcfb"
+_INK_PRIMARY = "#0b0b0b"
+_INK_SECONDARY = "#52514e"
+_GRIDLINE = "#e1e0d9"
+_STATUS_WARN_COLOR = "#e0a030"
+_STATUS_OVER_COLOR = "#d03b3b"
+_TINT_WARN = "#fdf0d9"
+_TINT_OVER = "#fbe2e2"
 
 
 def _money(x: float) -> str:
@@ -141,79 +158,180 @@ def _month_usage(today: date) -> dict:
     return used
 
 
-def build_budget_table(today: date) -> str:
-    """Markdown table of budget vs. spent vs. remaining per category for the
-    current month, plus an overspend callout if any category has run over."""
+def build_no_budget_message() -> str:
+    return (
+        "📋 No budget set for this month yet.\n"
+        "Use /setbudget <save_percent> to set one, e.g. /setbudget 20\n"
+        "(the salary it budgets from is your last recorded salary income in the *in* sheet)"
+    )
+
+
+# Fixed row heights (inches) that make up the image, in top-to-bottom draw
+# order — kept as constants so the upfront figure-height calculation and the
+# actual drawing loop can't drift out of sync with each other.
+_MARGIN_TOP = 0.3
+_TITLE_H = 0.42
+_INCOME_H = 0.3
+_SUMMARY_H = 0.32
+_GAP_BEFORE_HEADER = 0.16
+_COL_HEADER_H = 0.3
+_ROW_H = 0.4
+_GAP_BEFORE_TOTAL = 0.06
+_TOTAL_H = 0.42
+_GAP_BEFORE_FOOTER = 0.22
+_FOOTER_LINE_H = 0.26
+_MARGIN_BOTTOM = 0.25
+
+_FIG_W = 8.0
+_COL_CAT_X = 0.35
+_COL_BUDGET_X = 4.6
+_COL_USED_X = 6.1
+_COL_LEFT_X = 7.65
+
+
+def _text(ax, x, y, s, **kwargs):
+    """ax.text, but with literal '$' escaped — matplotlib's mathtext parser
+    treats any matched pair of unescaped '$' as a LaTeX math span, and every
+    dollar-amount line here has two or more."""
+    ax.text(x, y, s.replace("$", "\\$"), **kwargs)
+
+
+def render_budget_chart(today: date):
+    """Image of budget vs. spent vs. remaining per category for the current
+    month — status-tinted rows for anything over/near budget, plus a wrapped
+    overspend callout at the bottom. None if no budget is set this month or
+    there's nothing to show."""
     state = _load()
     if state.get("month") != today.strftime("%Y-%m"):
-        return (
-            "📋 No budget set for this month yet.\n"
-            "Use /setbudget <save_percent> to set one, e.g. /setbudget 20\n"
-            "(the salary it budgets from is your last recorded salary income in the *in* sheet)"
-        )
+        return None
 
     totals = _live_totals(state, today)
     category_budgets = totals["category_budgets"]
     used = _month_usage(today)
     all_cats = sorted(set(category_budgets) | set(used), key=lambda c: category_budgets.get(c, 0.0), reverse=True)
+    if not all_cats:
+        return None
 
-    salary_date_note = ""
-    if state.get("salary_date"):
-        salary_date_note = f" (recorded {date.fromisoformat(state['salary_date']).strftime('%d %b %Y')})"
-
-    income_line = f"💵 Income: ${state['salary']:,.2f} salary{salary_date_note}"
-    if totals["extra_income"] > 0:
-        income_line += f" + ${totals['extra_income']:,.2f} other = ${totals['total_income']:,.2f}"
-
-    lines = [
-        f"📋 *Budget — {today.strftime('%B %Y')}*",
-        income_line,
-        f"🏦 Savings target: ${totals['savings_target']:,.2f} ({state['save_pct']:.0f}%)",
-        f"💼 Spending budget: ${totals['spending_budget']:,.2f}",
-        "```",
-    ]
-
-    col_header = f"{'Category':<20}{'Budget':>11}{'Used':>11}{'Left':>11}"
-    lines += [col_header, "-" * len(col_header)]
-
-    total_budget = 0.0
-    total_used = 0.0
+    rows = []
     overspent = []
-
     for cat in all_cats:
         b = category_budgets.get(cat, 0.0)
         u = used.get(cat, 0.0)
         remaining = b - u
-        total_budget += b
-        total_used += u
-
         if remaining < 0:
-            prefix = f"{_STATUS_OVER} "
+            status = "over"
             overspent.append((cat, -remaining))
         elif b > 0 and u / b >= _WARN_THRESHOLD:
-            prefix = f"{_STATUS_WARN} "
+            status = "warn"
         else:
-            prefix = ""
+            status = "ok"
+        rows.append((cat, b, u, remaining, status))
 
-        name = f"{prefix}{CATEGORY_EMOJI.get(cat, OTHER_EMOJI)} {cat}"
-        lines.append(f"{name:<20}{_money(b):>11}{_money(u):>11}{_money(remaining):>11}")
-
+    total_budget = sum(r[1] for r in rows)
+    total_used = sum(r[2] for r in rows)
     total_remaining = total_budget - total_used
-    lines.append("-" * len(col_header))
-    lines.append(f"{'💵 Total':<20}{_money(total_budget):>11}{_money(total_used):>11}{_money(total_remaining):>11}")
-    lines.append("```")
 
+    footer_lines = []
+    footer_color = _INK_PRIMARY
     if overspent:
         total_overspend = sum(amt for _, amt in overspent)
         over_desc = ", ".join(f"{cat} (+${amt:,.2f})" for cat, amt in overspent)
-        lines.append("")
-        lines.append(f"🚨 Overspent in: {over_desc}")
-        lines.append(
-            f"To stay within your ${totals['spending_budget']:,.2f} budget this month, "
-            f"you'll need to spend ${total_overspend:,.2f} less across your other categories."
+        footer_lines = textwrap.wrap(
+            f"Overspent in: {over_desc}. To stay within your ${totals['spending_budget']:,.2f} budget "
+            f"this month, you'll need to spend ${total_overspend:,.2f} less across your other categories.",
+            width=72,
         )
+        footer_color = _STATUS_OVER_COLOR
     elif 0 <= total_remaining < total_budget * 0.2:
-        lines.append("")
-        lines.append(f"⚠️ Only ${total_remaining:,.2f} left in your overall budget this month — pace yourself.")
+        footer_lines = [f"Only ${total_remaining:,.2f} left in your overall budget this month — pace yourself."]
+        footer_color = _STATUS_WARN_COLOR
 
-    return "\n".join(lines)
+    n = len(rows)
+    fig_h = (
+        _MARGIN_TOP + _TITLE_H + _INCOME_H + _SUMMARY_H + _GAP_BEFORE_HEADER + _COL_HEADER_H
+        + _ROW_H * n + _GAP_BEFORE_TOTAL + _TOTAL_H
+        + (_GAP_BEFORE_FOOTER + _FOOTER_LINE_H * len(footer_lines) if footer_lines else 0)
+        + _MARGIN_BOTTOM
+    )
+
+    fig = plt.figure(figsize=(_FIG_W, fig_h), dpi=150)
+    fig.patch.set_facecolor(_SURFACE)
+    ax = fig.add_axes([0, 0, 1, 1])
+    ax.set_facecolor(_SURFACE)
+    ax.set_xlim(0, _FIG_W)
+    ax.set_ylim(0, fig_h)
+    ax.invert_yaxis()
+    ax.axis("off")
+
+    y = _MARGIN_TOP
+    _text(ax, _COL_CAT_X, y, f"Budget — {today.strftime('%B %Y')}", fontsize=14, fontweight="bold",
+            color=_INK_PRIMARY, va="top")
+    y += _TITLE_H
+
+    salary_date_note = ""
+    if state.get("salary_date"):
+        salary_date_note = f" (recorded {date.fromisoformat(state['salary_date']).strftime('%d %b %Y')})"
+    income_line = f"Income: ${state['salary']:,.2f} salary{salary_date_note}"
+    if totals["extra_income"] > 0:
+        income_line += f" + ${totals['extra_income']:,.2f} other = ${totals['total_income']:,.2f}"
+    _text(ax, _COL_CAT_X, y, income_line, fontsize=9.5, color=_INK_SECONDARY, va="top")
+    y += _INCOME_H
+
+    _text(ax, 
+        _COL_CAT_X, y,
+        f"Savings target: ${totals['savings_target']:,.2f} ({state['save_pct']:.0f}%)   "
+        f"Spending budget: ${totals['spending_budget']:,.2f}",
+        fontsize=9.5, color=_INK_SECONDARY, va="top",
+    )
+    y += _SUMMARY_H + _GAP_BEFORE_HEADER
+
+    for x, label, ha in ((_COL_CAT_X, "Category", "left"), (_COL_BUDGET_X, "Budget", "right"),
+                         (_COL_USED_X, "Used", "right"), (_COL_LEFT_X, "Left", "right")):
+        _text(ax, x, y, label, fontsize=8.5, fontweight="bold", color=_INK_SECONDARY, va="top", ha=ha)
+    y += _COL_HEADER_H
+    ax.plot([_COL_CAT_X, _FIG_W - _COL_CAT_X], [y, y], color=_GRIDLINE, linewidth=1)
+
+    for cat, b, u, remaining, status in rows:
+        if status == "over":
+            ax.add_patch(Rectangle((0, y), _FIG_W, _ROW_H, facecolor=_TINT_OVER, edgecolor="none", zorder=0))
+        elif status == "warn":
+            ax.add_patch(Rectangle((0, y), _FIG_W, _ROW_H, facecolor=_TINT_WARN, edgecolor="none", zorder=0))
+
+        text_y = y + _ROW_H / 2
+        if status != "ok":
+            dot_color = _STATUS_OVER_COLOR if status == "over" else _STATUS_WARN_COLOR
+            ax.add_patch(Circle((0.14, text_y), 0.055, color=dot_color, zorder=2))
+
+        _text(ax, _COL_CAT_X, text_y, cat, va="center", ha="left", fontsize=9.5, color=_INK_PRIMARY, zorder=2)
+        _text(ax, _COL_BUDGET_X, text_y, f"${b:,.2f}", va="center", ha="right", fontsize=9.5,
+                color=_INK_SECONDARY, zorder=2)
+        _text(ax, _COL_USED_X, text_y, f"${u:,.2f}", va="center", ha="right", fontsize=9.5,
+                color=_INK_PRIMARY, zorder=2)
+        _text(ax, _COL_LEFT_X, text_y, _money(remaining), va="center", ha="right", fontsize=9.5,
+                color=_STATUS_OVER_COLOR if remaining < 0 else _INK_PRIMARY,
+                fontweight="bold" if remaining < 0 else "normal", zorder=2)
+        y += _ROW_H
+
+    y += _GAP_BEFORE_TOTAL
+    ax.plot([_COL_CAT_X, _FIG_W - _COL_CAT_X], [y, y], color=_GRIDLINE, linewidth=1.2)
+    text_y = y + _TOTAL_H / 2
+    _text(ax, _COL_CAT_X, text_y, "Total", va="center", ha="left", fontsize=10, fontweight="bold", color=_INK_PRIMARY)
+    _text(ax, _COL_BUDGET_X, text_y, f"${total_budget:,.2f}", va="center", ha="right", fontsize=10,
+            fontweight="bold", color=_INK_PRIMARY)
+    _text(ax, _COL_USED_X, text_y, f"${total_used:,.2f}", va="center", ha="right", fontsize=10,
+            fontweight="bold", color=_INK_PRIMARY)
+    _text(ax, _COL_LEFT_X, text_y, _money(total_remaining), va="center", ha="right", fontsize=10, fontweight="bold",
+            color=_STATUS_OVER_COLOR if total_remaining < 0 else _INK_PRIMARY)
+    y += _TOTAL_H
+
+    if footer_lines:
+        y += _GAP_BEFORE_FOOTER
+        for line in footer_lines:
+            _text(ax, _COL_CAT_X, y, line, fontsize=9, color=footer_color, va="top")
+            y += _FOOTER_LINE_H
+
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", facecolor=_SURFACE)
+    plt.close(fig)
+    buf.seek(0)
+    return buf

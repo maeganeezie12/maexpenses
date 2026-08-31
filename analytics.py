@@ -264,8 +264,9 @@ def _historical_windows(kind: str, current_start: date, days_elapsed: int, earli
 
 
 def render_category_avg_comparison_chart(kind: str, today: date):
-    """Grouped bar chart: this period's per-category spend vs the all-time,
-    to-date-equivalent average per category. None if there's no expense data."""
+    """Bar chart of this period's per-category spend, with the all-time,
+    to-date-equivalent average per category overlaid as a line. None if
+    there's no expense data."""
     expenses = fetch_expenses()
     if not expenses:
         return None
@@ -300,25 +301,24 @@ def render_category_avg_comparison_chart(kind: str, today: date):
     ax.set_facecolor(_SURFACE)
 
     x = list(range(len(all_cats)))
-    bar_w = 0.35
-    bar_groups = [ax.bar([xi - bar_w / 2 for xi in x], cur_vals, bar_w,
-                          label=f"This {_PERIOD_LABELS[kind]}", color=_SEQUENTIAL_HUE)]
+    bars = ax.bar(x, cur_vals, width=0.6, label=f"This {_PERIOD_LABELS[kind]}", color=_SEQUENTIAL_HUE, zorder=2)
     if windows:
-        bar_groups.append(ax.bar([xi + bar_w / 2 for xi in x], avg_vals, bar_w,
-                                  label="All-time avg", color=_INK_SECONDARY))
+        ax.plot(
+            x, avg_vals, color=_INK_SECONDARY, linewidth=1.8, marker="o", markersize=5,
+            label="All-time avg", zorder=3,
+        )
 
     top = max(cur_vals + avg_vals) if (cur_vals + avg_vals) else 0
     if top:
         ax.set_ylim(top=top * 1.18)
-    for bars in bar_groups:
-        for b in bars:
-            h = b.get_height()
-            if h > 0:
-                ax.annotate(
-                    f"${h:,.0f}", (b.get_x() + b.get_width() / 2, h),
-                    textcoords="offset points", xytext=(0, 3), ha="center",
-                    fontsize=7, color=_INK_PRIMARY,
-                )
+    for b in bars:
+        h = b.get_height()
+        if h > 0:
+            ax.annotate(
+                f"${h:,.0f}", (b.get_x() + b.get_width() / 2, h),
+                textcoords="offset points", xytext=(0, 3), ha="center",
+                fontsize=7, color=_INK_PRIMARY,
+            )
 
     ax.set_xticks(x)
     ax.set_xticklabels(tick_labels, color=_INK_SECONDARY, fontsize=8, rotation=45, ha="right")

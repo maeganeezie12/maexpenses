@@ -165,8 +165,15 @@ async def parse_income(text: str, today: date_type):
     """Parse a free-text income message into date/amount/description.
 
     Tries Gemini first; falls back to a simple regex parser if Gemini isn't
-    configured or errors.
+    configured or errors. If the raw text is nothing but an amount (and
+    optionally a date phrase, e.g. '3200' or '3200 yesterday'), the
+    description defaults to "salary" regardless of what either parser
+    guessed — salary is the income /income gets used for bare-number-only.
     """
+    _, remaining = extract_date(text, today)
+    _, remaining = _split_amount_and_text(remaining)
+    bare_amount_only = not remaining.strip()
+
     if _client:
         try:
             response = await _client.aio.models.generate_content(
@@ -190,9 +197,12 @@ async def parse_income(text: str, today: date_type):
             return {
                 "date": date_type.fromisoformat(date_str) if date_str else None,
                 "amount": float(data["amount"]),
-                "description": data["description"],
+                "description": "salary" if bare_amount_only else data["description"],
             }
         except Exception:
             logger.exception("Gemini call failed while parsing income")
 
-    return _fallback_parse_income(text, today)
+    result = _fallback_parse_income(text, today)
+    if bare_amount_only:
+        result["description"] = "salary"
+    return result

@@ -15,7 +15,7 @@ from analytics import (
     render_net_income_chart,
     render_spending_by_month,
 )
-from budget import build_budget_table, set_budget
+from budget import build_no_budget_message, render_budget_chart, set_budget
 from config import ALLOWED_USER_ID, CATEGORIES, OUT_SHEET_NAME
 from integrity import run_daily_check
 from llm import parse_expense, parse_income
@@ -44,7 +44,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Send me an expense like `3.9 lunch` and I'll log it to the *out* sheet.\n"
         "Send /income 1221 salary to log income to the *in* sheet.\n\n"
         "Commands:\n"
-        "/income — log income, e.g. /income 1221 salary\n"
+        "/income — log income, e.g. /income 1221 salary (a bare number with no description defaults to salary)\n"
         "/undo — remove the last entry you logged\n"
         "/day — vs yesterday, by category, + last 7 days trend by category\n"
         "/week — week to date vs same days last week, by category, + last 4 weeks trend by category\n"
@@ -134,13 +134,21 @@ async def setbudget_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    await update.message.reply_text(build_budget_table(today), parse_mode="Markdown")
+    chart = render_budget_chart(today)
+    if chart:
+        await update.message.reply_photo(photo=chart)
+    else:
+        await update.message.reply_text(build_no_budget_message())
 
 
 async def budget_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not _authorized(update):
         return
-    await update.message.reply_text(build_budget_table(today_local()), parse_mode="Markdown")
+    chart = render_budget_chart(today_local())
+    if chart:
+        await update.message.reply_photo(photo=chart)
+    else:
+        await update.message.reply_text(build_no_budget_message())
 
 
 async def log_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
