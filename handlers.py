@@ -10,7 +10,7 @@ from analytics import (
     build_category_avg_table,
     build_summary,
     has_investment_this_month,
-    render_category_avg_comparison_chart,
+    render_category_spend_chart,
     render_history_chart,
     render_net_income_chart,
     render_spending_by_month,
@@ -52,6 +52,8 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/year — year-to-date vs same period last year, by category\n"
         "/spending — stacked bar chart of every category by month (this/last/next year or all time)\n"
         "/avgspend — table of total/transactions/average per category (week/month/year), + chart vs all-time average\n"
+        "/catspend — pick a category and a period (week/month/year); bar chart of that category's spend, "
+        "each bar labeled with $ and % of the period, plus total/transactions/average in the title\n"
         "/setbudget — set this month's budget from a save %, e.g. /setbudget 20; "
         "salary is your last recorded salary income in the *in* sheet, allowance to parents carries over from last "
         "month's Allowance expense, and the rest of the categories follow last month's spend split\n"
@@ -301,9 +303,59 @@ async def avgspend_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     table = build_category_avg_table(kind, today)
     await query.message.reply_text(table, parse_mode="Markdown")
 
-    chart = render_category_avg_comparison_chart(kind, today)
+
+def _catspend_category_keyboard():
+    buttons = [InlineKeyboardButton(cat, callback_data=f"catspendcat:{cat}") for cat in _CATEGORY_BUTTON_ORDER]
+    rows = [buttons[i : i + 3] for i in range(0, len(buttons), 3)]
+    return InlineKeyboardMarkup(rows)
+
+
+def _catspend_period_keyboard(category: str):
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton("Week", callback_data=f"catspendperiod:{category}:w"),
+                InlineKeyboardButton("Month", callback_data=f"catspendperiod:{category}:m"),
+                InlineKeyboardButton("Year", callback_data=f"catspendperiod:{category}:y"),
+            ]
+        ]
+    )
+
+
+async def catspend_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not _authorized(update):
+        return
+    await update.message.reply_text(
+        "Category spend chart — pick a category:", reply_markup=_catspend_category_keyboard()
+    )
+
+
+async def catspend_category_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    if not _authorized(update):
+        await query.answer()
+        return
+
+    await query.answer()
+    _, category = query.data.split(":", 1)
+    await query.edit_message_text(
+        f"Category: {category}. Now pick a period:", reply_markup=_catspend_period_keyboard(category)
+    )
+
+
+async def catspend_period_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    if not _authorized(update):
+        await query.answer()
+        return
+
+    await query.answer()
+    _, category, kind = query.data.split(":", 2)
+    chart = render_category_spend_chart(category, kind, today_local())
     if chart:
         await query.message.reply_photo(photo=chart)
+    else:
+        await query.message.reply_text(f"No {category} expenses logged for that period.")
 
 
 def _history_granularity_keyboard():

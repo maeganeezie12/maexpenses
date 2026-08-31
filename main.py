@@ -20,6 +20,9 @@ from handlers import (
     avgspend_command,
     budget_command,
     category_fix_callback,
+    catspend_category_callback,
+    catspend_command,
+    catspend_period_callback,
     checksheet_command,
     daily_check_job,
     gsheet_command,
@@ -98,6 +101,7 @@ def main():
     app.add_handler(CommandHandler("checksheet", checksheet_command))
     app.add_handler(CommandHandler("spending", spending_command))
     app.add_handler(CommandHandler("avgspend", avgspend_command))
+    app.add_handler(CommandHandler("catspend", catspend_command))
     app.add_handler(CommandHandler("setbudget", setbudget_command))
     app.add_handler(CommandHandler("budget", budget_command))
     app.add_handler(CommandHandler("history", history_command))
@@ -108,6 +112,8 @@ def main():
     app.add_handler(CallbackQueryHandler(redack_callback, pattern=r"^redack:"))
     app.add_handler(CallbackQueryHandler(spending_callback, pattern=r"^spend:"))
     app.add_handler(CallbackQueryHandler(avgspend_callback, pattern=r"^avgspend:"))
+    app.add_handler(CallbackQueryHandler(catspend_category_callback, pattern=r"^catspendcat:"))
+    app.add_handler(CallbackQueryHandler(catspend_period_callback, pattern=r"^catspendperiod:"))
     app.add_handler(CallbackQueryHandler(history_granularity_callback, pattern=r"^histgran:"))
     app.add_handler(CallbackQueryHandler(history_year_callback, pattern=r"^histyear:"))
     app.add_handler(CallbackQueryHandler(net_callback, pattern=r"^net:"))
