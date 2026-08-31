@@ -7,12 +7,15 @@ from telegram.ext import ContextTypes
 
 import sheets
 from analytics import (
+    build_category_avg_table,
     build_summary,
     has_investment_this_month,
+    render_category_avg_comparison_chart,
     render_history_chart,
     render_net_income_chart,
     render_spending_by_month,
 )
+from budget import build_budget_table, set_budget
 from config import ALLOWED_USER_ID, CATEGORIES, OUT_SHEET_NAME
 from integrity import run_daily_check
 from llm import parse_expense, parse_income
@@ -48,6 +51,10 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/month — month to date vs same days last month, by category, + last 3 months trend by category\n"
         "/year — year-to-date vs same period last year, by category\n"
         "/spending — stacked bar chart of every category by month (this/last/next year or all time)\n"
+        "/avgspend — table of total/transactions/average per category (week/month/year), + chart vs all-time average\n"
+        "/setbudget — set this month's budget from a save %, e.g. /setbudget 20; "
+        "salary is your last recorded salary income in the *in* sheet, and category budgets follow last month's spend split\n"
+        "/budget — this month's budget used vs remaining, by category\n"
         "/history — total spending by day/week/month (this/last/next year or all time)\n"
         "/net — net income by month, income minus expenses (this/last/next year or all time)\n"
         "/checksheet — check for missing dates, missing categories, or new automated rows\n"
@@ -97,6 +104,43 @@ async def income_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"Logged income: {entry_date.strftime('%d %b %Y')} | ${parsed['amount']:.2f} | {parsed['description']}"
     )
+
+
+async def setbudget_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not _authorized(update):
+        return
+
+    usage = "Usage: /setbudget <save_percent>\ne.g. /setbudget 20"
+    if len(context.args) < 1:
+        await update.message.reply_text(usage)
+        return
+
+    try:
+        save_pct = float(context.args[0])
+    except ValueError:
+        await update.message.reply_text(f"Save percent must be a number.\n{usage}")
+        return
+
+    if not (0 <= save_pct <= 100):
+        await update.message.reply_text("Save percent must be between 0 and 100.")
+        return
+
+    today = today_local()
+    state = set_budget(save_pct, today)
+    if state is None:
+        await update.message.reply_text(
+            "No salary income found in the *in* sheet yet. Log it first, e.g. /income 3200 salary",
+            parse_mode="Markdown",
+        )
+        return
+
+    await update.message.reply_text(build_budget_table(today), parse_mode="Markdown")
+
+
+async def budget_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not _authorized(update):
+        return
+    await update.message.reply_text(build_budget_table(today_local()), parse_mode="Markdown")
 
 
 async def log_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -214,6 +258,43 @@ async def spending_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_photo(photo=chart)
     else:
         await query.message.reply_text("No expense data for that range.")
+
+
+def _avg_period_keyboard():
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton("Week", callback_data="avgspend:w"),
+                InlineKeyboardButton("Month", callback_data="avgspend:m"),
+                InlineKeyboardButton("Year", callback_data="avgspend:y"),
+            ]
+        ]
+    )
+
+
+async def avgspend_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not _authorized(update):
+        return
+    await update.message.reply_text(
+        "Average spend by category — pick a period:", reply_markup=_avg_period_keyboard()
+    )
+
+
+async def avgspend_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    if not _authorized(update):
+        await query.answer()
+        return
+
+    await query.answer()
+    _, kind = query.data.split(":", 1)
+    today = today_local()
+    table = build_category_avg_table(kind, today)
+    await query.message.reply_text(table, parse_mode="Markdown")
+
+    chart = render_category_avg_comparison_chart(kind, today)
+    if chart:
+        await query.message.reply_photo(photo=chart)
 
 
 def _history_granularity_keyboard():

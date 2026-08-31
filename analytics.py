@@ -34,6 +34,22 @@ _PALETTE_HEX = [
 _CATEGORY_COLOR = dict(zip(_PALETTE_ORDER, _PALETTE_HEX))
 _OTHER_COLOR = "#898781"  # fallback only, for any category string outside the fixed list
 
+CATEGORY_EMOJI = {
+    "FNB": "🍔",
+    "Transport": "🚗",
+    "Shopping": "🛍️",
+    "Entertainment": "🎮",
+    "Subscription": "📱",
+    "Travel": "✈️",
+    "Alcohol": "🍺",
+    "Misc": "📦",
+    "Allowance": "💰",
+    "Investment": "📈",
+    "Hobbies": "🎯",
+    "Gifts": "🎁",
+}
+OTHER_EMOJI = "🔖"  # fallback only, for any category string outside the fixed list
+
 _SURFACE = "#fcfcfb"
 _INK_PRIMARY = "#0b0b0b"
 _INK_SECONDARY = "#52514e"
@@ -173,6 +189,155 @@ def _totals_by_category(filtered: list) -> dict:
     for e in filtered:
         totals[e["category"]] = totals.get(e["category"], 0.0) + e["price"]
     return totals
+
+
+def build_category_avg_table(kind: str, today: date) -> str:
+    """Table of total spend, transaction count, and average per transaction,
+    per category, for the given period (to-date, same as /week etc.)."""
+    start, end = period_bounds(kind, today)
+    filtered = _filter(fetch_expenses(), start, end)
+    label = _period_label(kind, start, end)
+    header_line = f"📊 Average Spend by Category — {label}"
+
+    if not filtered:
+        return f"{header_line}\n\nNo expenses logged for this period."
+
+    totals: dict = {}
+    counts: dict = {}
+    for e in filtered:
+        totals[e["category"]] = totals.get(e["category"], 0.0) + e["price"]
+        counts[e["category"]] = counts.get(e["category"], 0) + 1
+
+    ranked = sorted(totals.items(), key=lambda kv: kv[1], reverse=True)
+
+    col_header = f"{'Category':<16}{'Total':>11}{'Txns':>6}{'Avg':>10}"
+    lines = [header_line, "```", col_header, "-" * len(col_header)]
+
+    for cat, total in ranked:
+        n = counts[cat]
+        avg = total / n
+        name = f"{CATEGORY_EMOJI.get(cat, OTHER_EMOJI)} {cat}"
+        lines.append(f"{name:<16}{f'${total:,.2f}':>11}{n:>6}{f'${avg:,.2f}':>10}")
+
+    grand_total = sum(totals.values())
+    grand_count = len(filtered)
+    lines.append("-" * len(col_header))
+    lines.append(f"{'💵 Total':<16}{f'${grand_total:,.2f}':>11}{grand_count:>6}{f'${grand_total / grand_count:,.2f}':>10}")
+    lines.append("```")
+    return "\n".join(lines)
+
+
+def _elapsed_days(start: date, end: date) -> int:
+    return (end - start).days + 1
+
+
+def _historical_windows(kind: str, current_start: date, days_elapsed: int, earliest: date):
+    """To-date-equivalent windows (same elapsed-day length as the current,
+    possibly-in-progress period) for every full historical period of this
+    kind before the current one — mirrors _previous_bounds' elapsed-day
+    matching so the 'all-time average' comparison stays apples-to-apples."""
+    windows = []
+
+    if kind == "w":
+        wk_start = earliest - timedelta(days=earliest.weekday())
+        while wk_start < current_start:
+            windows.append((wk_start, wk_start + timedelta(days=days_elapsed - 1)))
+            wk_start += timedelta(days=7)
+
+    elif kind == "m":
+        m_start = earliest.replace(day=1)
+        while m_start < current_start:
+            month_len = (_add_months(m_start, 1) - timedelta(days=1)).day
+            span = min(days_elapsed, month_len)
+            windows.append((m_start, m_start + timedelta(days=span - 1)))
+            m_start = _add_months(m_start, 1)
+
+    elif kind == "y":
+        y_start = date(earliest.year, 1, 1)
+        while y_start < current_start:
+            year_len = (date(y_start.year, 12, 31) - y_start).days + 1
+            span = min(days_elapsed, year_len)
+            windows.append((y_start, y_start + timedelta(days=span - 1)))
+            y_start = date(y_start.year + 1, 1, 1)
+
+    return windows
+
+
+def render_category_avg_comparison_chart(kind: str, today: date):
+    """Grouped bar chart: this period's per-category spend vs the all-time,
+    to-date-equivalent average per category. None if there's no expense data."""
+    expenses = fetch_expenses()
+    if not expenses:
+        return None
+
+    start, end = period_bounds(kind, today)
+    filtered = _filter(expenses, start, end)
+    cur_totals = _totals_by_category(filtered)
+
+    earliest = min(e["date"] for e in expenses)
+    days_elapsed = _elapsed_days(start, end)
+    windows = _historical_windows(kind, start, days_elapsed, earliest)
+
+    hist_sums: dict = {}
+    for w_start, w_end in windows:
+        for cat, val in _totals_by_category(_filter(expenses, w_start, w_end)).items():
+            hist_sums[cat] = hist_sums.get(cat, 0.0) + val
+    hist_avgs = {cat: v / len(windows) for cat, v in hist_sums.items()} if windows else {}
+
+    all_cats = _palette_ordered(set(cur_totals) | set(hist_avgs))
+    if not all_cats:
+        return None
+
+    cur_vals = [cur_totals.get(c, 0.0) for c in all_cats]
+    avg_vals = [hist_avgs.get(c, 0.0) for c in all_cats]
+    # Plain category names, not emoji — matplotlib's default font (DejaVu
+    # Sans) has no emoji glyphs, so those would render as blank boxes here.
+    tick_labels = all_cats
+
+    width = min(20, max(7, len(all_cats) * 1.1))
+    fig, ax = plt.subplots(figsize=(width, 5), dpi=150)
+    fig.patch.set_facecolor(_SURFACE)
+    ax.set_facecolor(_SURFACE)
+
+    x = list(range(len(all_cats)))
+    bar_w = 0.35
+    bar_groups = [ax.bar([xi - bar_w / 2 for xi in x], cur_vals, bar_w,
+                          label=f"This {_PERIOD_LABELS[kind]}", color=_SEQUENTIAL_HUE)]
+    if windows:
+        bar_groups.append(ax.bar([xi + bar_w / 2 for xi in x], avg_vals, bar_w,
+                                  label="All-time avg", color=_INK_SECONDARY))
+
+    top = max(cur_vals + avg_vals) if (cur_vals + avg_vals) else 0
+    if top:
+        ax.set_ylim(top=top * 1.18)
+    for bars in bar_groups:
+        for b in bars:
+            h = b.get_height()
+            if h > 0:
+                ax.annotate(
+                    f"${h:,.0f}", (b.get_x() + b.get_width() / 2, h),
+                    textcoords="offset points", xytext=(0, 3), ha="center",
+                    fontsize=7, color=_INK_PRIMARY,
+                )
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(tick_labels, color=_INK_SECONDARY, fontsize=8, rotation=45, ha="right")
+    ax.tick_params(axis="y", colors=_INK_SECONDARY, labelsize=8)
+    for spine in ("top", "right"):
+        ax.spines[spine].set_visible(False)
+    ax.spines["bottom"].set_color(_GRIDLINE)
+    ax.spines["left"].set_color(_GRIDLINE)
+    ax.legend(loc="upper right", frameon=False, labelcolor=_INK_PRIMARY, fontsize=8)
+    ax.set_title(
+        f"{_PERIOD_LABELS[kind].capitalize()} spend vs all-time average, by category — {_period_label(kind, start, end)}",
+        color=_INK_PRIMARY, fontsize=11, pad=10,
+    )
+
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", bbox_inches="tight", facecolor=_SURFACE)
+    plt.close(fig)
+    buf.seek(0)
+    return buf
 
 
 def _period_label(kind: str, start: date, end: date) -> str:

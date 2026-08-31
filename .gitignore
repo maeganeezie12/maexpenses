@@ -2,6 +2,7 @@
 service_account.json
 last_entry.json
 seen_red_rows.json
+budget.json
 expense_bot.log
 __pycache__/
 *.pyc
