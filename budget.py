@@ -288,6 +288,13 @@ def render_budget_chart(today: date):
     total_used = sum(r[2] for r in rows)
     total_remaining = total_budget - total_used
 
+    # Logo sits beside the footer text (same rows), not stacked below it —
+    # so the footer is wrapped narrower to leave its column clear, rather
+    # than reserving extra height purely for the image.
+    logo_w_in = 1.0
+    logo_h_in = (logo_w_in * _LOGO_IMG.shape[0] / _LOGO_IMG.shape[1]) if _LOGO_IMG is not None else 0.0
+    footer_wrap_width = 56 if _LOGO_IMG is not None else 72
+
     footer_lines = []
     footer_color = _INK_PRIMARY
     if overspent:
@@ -296,18 +303,27 @@ def render_budget_chart(today: date):
         footer_lines = textwrap.wrap(
             f"Overspent in: {over_desc}. To stay within your ${totals['spending_budget']:,.2f} budget "
             f"this month, you'll need to spend ${total_overspend:,.2f} less across your other categories.",
-            width=72,
+            width=footer_wrap_width,
         )
         footer_color = _STATUS_OVER_COLOR
     elif 0 <= total_remaining < total_budget * 0.2:
-        footer_lines = [f"Only ${total_remaining:,.2f} left in your overall budget this month — pace yourself."]
+        footer_lines = textwrap.wrap(
+            f"Only ${total_remaining:,.2f} left in your overall budget this month — pace yourself.",
+            width=footer_wrap_width,
+        )
         footer_color = _STATUS_WARN_COLOR
+
+    # The shared bottom band is as tall as whichever of (wrapped footer
+    # text, logo) needs more room — they sit side by side, not stacked.
+    footer_block_h = _FOOTER_LINE_H * len(footer_lines)
+    bottom_band_h = max(footer_block_h, logo_h_in if _LOGO_IMG is not None else 0.0)
+    bottom_band_gap = _GAP_BEFORE_FOOTER if (footer_lines or _LOGO_IMG is not None) else 0.0
 
     n = len(rows)
     fig_h = (
         _MARGIN_TOP + _TITLE_H + _INCOME_H + _ALLOWANCE_H + _SUMMARY_H + _GAP_BEFORE_HEADER + _COL_HEADER_H
         + _ROW_H * n + _GAP_BEFORE_TOTAL + _TOTAL_H
-        + (_GAP_BEFORE_FOOTER + _FOOTER_LINE_H * len(footer_lines) if footer_lines else 0)
+        + bottom_band_gap + bottom_band_h
         + _MARGIN_BOTTOM
     )
 
@@ -397,24 +413,23 @@ def render_budget_chart(today: date):
             color=_STATUS_OVER_COLOR if total_remaining < 0 else _INK_PRIMARY)
     y += _TOTAL_H
 
-    if footer_lines:
-        y += _GAP_BEFORE_FOOTER
+    if footer_lines or _LOGO_IMG is not None:
+        y += bottom_band_gap
+        band_top = y
+
         for line in footer_lines:
             _text(ax, _COL_CAT_X, y, line, fontsize=9, color=footer_color, va="top")
             y += _FOOTER_LINE_H
 
-    if _LOGO_IMG is not None:
-        # Anchored to the bottom-right corner of the figure (unchanged
-        # height) and layered on top of whatever's already there — a
-        # watermark-style overlay, not extra reserved space.
-        logo_w_in = 1.3
-        logo_h_in = logo_w_in * _LOGO_IMG.shape[0] / _LOGO_IMG.shape[1]
-        margin = 0.2
-        x1 = _FIG_W - margin
-        x0 = x1 - logo_w_in
-        y1 = fig_h - margin
-        y0 = y1 - logo_h_in
-        ax.imshow(_LOGO_IMG, extent=(x0, x1, y1, y0), zorder=20, aspect="auto")
+        if _LOGO_IMG is not None:
+            # Anchored to the right, starting at the same row as the footer
+            # text (band_top) rather than stacked below it — the footer was
+            # wrapped narrower up front specifically to leave this column
+            # clear, so the two never overlap regardless of footer length.
+            margin = 0.2
+            x1 = _FIG_W - margin
+            x0 = x1 - logo_w_in
+            ax.imshow(_LOGO_IMG, extent=(x0, x1, band_top + logo_h_in, band_top), zorder=20, aspect="auto")
 
     buf = io.BytesIO()
     fig.savefig(buf, format="png", facecolor=_SURFACE)
