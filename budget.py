@@ -15,11 +15,12 @@ from config import CATEGORIES
 
 _STATE_FILE = os.path.join(os.path.dirname(__file__), "budget.json")
 
-# Allowance is income landing in the out sheet, not a spend category — it's
-# excluded from every budget calculation the same way analytics excludes it
-# from "top category" narratives.
-_EXCLUDE_FROM_BUDGET = {"Allowance"}
-_SPEND_CATEGORIES = [c for c in CATEGORIES if c not in _EXCLUDE_FROM_BUDGET]
+# Allowance (money given to parents each month) gets a fixed target carved
+# out of income up front — like the savings target — rather than a
+# proportional share of the discretionary spending budget, so it's excluded
+# from the last-month percentage split the other categories benchmark off.
+_EXCLUDE_FROM_PCT_SPLIT = {"Allowance"}
+_SPEND_CATEGORIES = [c for c in CATEGORIES if c not in _EXCLUDE_FROM_PCT_SPLIT]
 
 _WARN_THRESHOLD = 0.9  # flag a category once 90% of its budget is used
 
@@ -73,7 +74,7 @@ def _last_month_category_pcts(today: date) -> dict:
 
     totals: dict = {}
     for e in fetch_expenses():
-        if last_month_start <= e["date"] <= last_month_end and e["category"] not in _EXCLUDE_FROM_BUDGET:
+        if last_month_start <= e["date"] <= last_month_end and e["category"] not in _EXCLUDE_FROM_PCT_SPLIT:
             totals[e["category"]] = totals.get(e["category"], 0.0) + e["price"]
 
     total = sum(totals.values())
@@ -97,6 +98,19 @@ def get_last_salary(today: date):
     return latest["amount"], latest["date"]
 
 
+def get_last_allowance(today: date):
+    """Most recent Allowance-category expense recorded before this month —
+    what was last given to parents, used as this month's target the same
+    way get_last_salary looks up income. Returns (amount, date), or None if
+    no Allowance expense has ever been logged."""
+    cutoff = today.replace(day=1)
+    allowance_entries = [e for e in fetch_expenses() if e["category"] == "Allowance" and e["date"] < cutoff]
+    if not allowance_entries:
+        return None
+    latest = max(allowance_entries, key=lambda e: e["date"])
+    return latest["price"], latest["date"]
+
+
 def _current_month_extra_income(today: date) -> float:
     """This month's non-salary income (cashback, gifts, etc. logged via
     /income) — money on top of last month's salary that's also available to
@@ -109,22 +123,28 @@ def _current_month_extra_income(today: date) -> float:
 
 
 def set_budget(save_pct: float, today: date):
-    """Persists this month's save percentage and category split (as
-    percentages, not dollar amounts) benchmarked off last month's spend.
-    Salary and any non-salary income are looked up live every time the
-    budget is displayed (see _live_totals) rather than frozen here, so a
-    cashback logged mid-month immediately grows the available budget.
-    Returns the saved state, or None if no salary income has been logged."""
+    """Persists this month's save percentage, allowance target, and category
+    split (as percentages, not dollar amounts) benchmarked off last month's
+    spend. Salary, allowance, and any non-salary income are looked up live
+    every time the budget is displayed (see _live_totals) rather than frozen
+    here, so a cashback logged mid-month immediately grows the available
+    budget. Returns the saved state, or None if no salary income has been
+    logged."""
     salary_info = get_last_salary(today)
     if salary_info is None:
         return None
     salary, salary_date = salary_info
+
+    allowance_info = get_last_allowance(today)
+    allowance_target, allowance_date = allowance_info if allowance_info else (0.0, None)
 
     state = {
         "month": today.strftime("%Y-%m"),
         "salary": salary,
         "salary_date": salary_date.isoformat(),
         "save_pct": save_pct,
+        "allowance_target": allowance_target,
+        "allowance_date": allowance_date.isoformat() if allowance_date else None,
         "category_pcts": _last_month_category_pcts(today),
     }
     _save(state)
@@ -133,17 +153,23 @@ def set_budget(save_pct: float, today: date):
 
 def _live_totals(state: dict, today: date) -> dict:
     """Recomputes total income (last month's salary + this month's
-    non-salary income so far), then derives the savings target, spending
-    budget, and per-category budgets from the stored save % and split."""
+    non-salary income so far), then derives the savings target, the
+    allowance target (fixed at last month's given amount), the remaining
+    discretionary spending budget, and per-category budgets from the stored
+    save % and split. Allowance is carved out up front like savings rather
+    than getting a proportional share, and always gets its own budget row."""
     extra_income = _current_month_extra_income(today)
     total_income = state["salary"] + extra_income
     savings_target = total_income * state["save_pct"] / 100
-    spending_budget = total_income - savings_target
+    allowance_target = state.get("allowance_target", 0.0)
+    spending_budget = total_income - savings_target - allowance_target
     category_budgets = {cat: spending_budget * pct for cat, pct in state["category_pcts"].items()}
+    category_budgets["Allowance"] = allowance_target
     return {
         "extra_income": extra_income,
         "total_income": total_income,
         "savings_target": savings_target,
+        "allowance_target": allowance_target,
         "spending_budget": spending_budget,
         "category_budgets": category_budgets,
     }
@@ -153,7 +179,7 @@ def _month_usage(today: date) -> dict:
     start, end = _month_bounds(today)
     used: dict = {}
     for e in fetch_expenses():
-        if start <= e["date"] <= end and e["category"] not in _EXCLUDE_FROM_BUDGET:
+        if start <= e["date"] <= end:
             used[e["category"]] = used.get(e["category"], 0.0) + e["price"]
     return used
 
@@ -172,6 +198,7 @@ def build_no_budget_message() -> str:
 _MARGIN_TOP = 0.3
 _TITLE_H = 0.42
 _INCOME_H = 0.3
+_ALLOWANCE_H = 0.3
 _SUMMARY_H = 0.32
 _GAP_BEFORE_HEADER = 0.16
 _COL_HEADER_H = 0.3
@@ -248,7 +275,7 @@ def render_budget_chart(today: date):
 
     n = len(rows)
     fig_h = (
-        _MARGIN_TOP + _TITLE_H + _INCOME_H + _SUMMARY_H + _GAP_BEFORE_HEADER + _COL_HEADER_H
+        _MARGIN_TOP + _TITLE_H + _INCOME_H + _ALLOWANCE_H + _SUMMARY_H + _GAP_BEFORE_HEADER + _COL_HEADER_H
         + _ROW_H * n + _GAP_BEFORE_TOTAL + _TOTAL_H
         + (_GAP_BEFORE_FOOTER + _FOOTER_LINE_H * len(footer_lines) if footer_lines else 0)
         + _MARGIN_BOTTOM
@@ -277,7 +304,17 @@ def render_budget_chart(today: date):
     _text(ax, _COL_CAT_X, y, income_line, fontsize=9.5, color=_INK_SECONDARY, va="top")
     y += _INCOME_H
 
-    _text(ax, 
+    allowance_date_note = ""
+    if state.get("allowance_date"):
+        allowance_date_note = f" (last given {date.fromisoformat(state['allowance_date']).strftime('%d %b %Y')})"
+    _text(
+        ax, _COL_CAT_X, y,
+        f"Allowance to parents: ${totals['allowance_target']:,.2f}{allowance_date_note}",
+        fontsize=9.5, color=_INK_SECONDARY, va="top",
+    )
+    y += _ALLOWANCE_H
+
+    _text(ax,
         _COL_CAT_X, y,
         f"Savings target: ${totals['savings_target']:,.2f} ({state['save_pct']:.0f}%)   "
         f"Spending budget: ${totals['spending_budget']:,.2f}",

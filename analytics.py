@@ -191,6 +191,13 @@ def _totals_by_category(filtered: list) -> dict:
     return totals
 
 
+def _counts_by_category(filtered: list) -> dict:
+    counts = {}
+    for e in filtered:
+        counts[e["category"]] = counts.get(e["category"], 0) + 1
+    return counts
+
+
 def build_category_avg_table(kind: str, today: date) -> str:
     """Table of total spend, transaction count, and average per transaction,
     per category, for the given period (to-date, same as /week etc.)."""
@@ -264,9 +271,9 @@ def _historical_windows(kind: str, current_start: date, days_elapsed: int, earli
 
 
 def render_category_avg_comparison_chart(kind: str, today: date):
-    """Bar chart of this period's per-category spend, with the all-time,
-    to-date-equivalent average per category overlaid as a line. None if
-    there's no expense data."""
+    """Bar chart of this period's average spend per transaction, per
+    category, with the all-time average transaction size overlaid as a
+    line. None if there's no expense data."""
     expenses = fetch_expenses()
     if not expenses:
         return None
@@ -274,22 +281,31 @@ def render_category_avg_comparison_chart(kind: str, today: date):
     start, end = period_bounds(kind, today)
     filtered = _filter(expenses, start, end)
     cur_totals = _totals_by_category(filtered)
+    cur_counts = _counts_by_category(filtered)
+    cur_avgs = {cat: cur_totals[cat] / cur_counts[cat] for cat in cur_totals}
 
     earliest = min(e["date"] for e in expenses)
     days_elapsed = _elapsed_days(start, end)
     windows = _historical_windows(kind, start, days_elapsed, earliest)
 
+    # Aggregate totals and counts across every historical window first, then
+    # divide once per category — an average of per-window averages would
+    # weight a window with 1 transaction the same as one with 50.
     hist_sums: dict = {}
+    hist_counts: dict = {}
     for w_start, w_end in windows:
-        for cat, val in _totals_by_category(_filter(expenses, w_start, w_end)).items():
+        w_filtered = _filter(expenses, w_start, w_end)
+        for cat, val in _totals_by_category(w_filtered).items():
             hist_sums[cat] = hist_sums.get(cat, 0.0) + val
-    hist_avgs = {cat: v / len(windows) for cat, v in hist_sums.items()} if windows else {}
+        for cat, n in _counts_by_category(w_filtered).items():
+            hist_counts[cat] = hist_counts.get(cat, 0) + n
+    hist_avgs = {cat: hist_sums[cat] / hist_counts[cat] for cat in hist_sums if hist_counts.get(cat)}
 
-    all_cats = _palette_ordered(set(cur_totals) | set(hist_avgs))
+    all_cats = _palette_ordered(set(cur_avgs) | set(hist_avgs))
     if not all_cats:
         return None
 
-    cur_vals = [cur_totals.get(c, 0.0) for c in all_cats]
+    cur_vals = [cur_avgs.get(c, 0.0) for c in all_cats]
     avg_vals = [hist_avgs.get(c, 0.0) for c in all_cats]
     # Plain category names, not emoji — matplotlib's default font (DejaVu
     # Sans) has no emoji glyphs, so those would render as blank boxes here.
@@ -315,7 +331,7 @@ def render_category_avg_comparison_chart(kind: str, today: date):
         h = b.get_height()
         if h > 0:
             ax.annotate(
-                f"${h:,.0f}", (b.get_x() + b.get_width() / 2, h),
+                f"${h:,.2f}", (b.get_x() + b.get_width() / 2, h),
                 textcoords="offset points", xytext=(0, 3), ha="center",
                 fontsize=7, color=_INK_PRIMARY,
             )
@@ -329,7 +345,7 @@ def render_category_avg_comparison_chart(kind: str, today: date):
     ax.spines["left"].set_color(_GRIDLINE)
     ax.legend(loc="upper right", frameon=False, labelcolor=_INK_PRIMARY, fontsize=8)
     ax.set_title(
-        f"{_PERIOD_LABELS[kind].capitalize()} spend vs all-time average, by category — {_period_label(kind, start, end)}",
+        f"Avg spend per transaction vs all-time average, by category — {_period_label(kind, start, end)}",
         color=_INK_PRIMARY, fontsize=11, pad=10,
     )
 
