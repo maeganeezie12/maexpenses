@@ -54,10 +54,10 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/avgspend — table of total/transactions/average per category (week/month/year), + chart vs all-time average\n"
         "/catspend — pick a category and a period (week/month/year); bar chart of that category's spend, "
         "each bar labeled with $ and % of the period, plus total/transactions/average in the title\n"
-        "/setbudget — set this month's budget from a save %, e.g. /setbudget 20; "
-        "salary is your last recorded salary income in the *in* sheet, allowance to parents carries over from last "
+        "/setbudget — pick a savings % (10/15/20); it stays in effect every month until you pick a new one. "
+        "Salary is your last recorded salary income in the *in* sheet, allowance to parents carries over from last "
         "month's Allowance expense, and the rest of the categories follow last month's spend split\n"
-        "/budget — this month's budget used vs remaining, by category\n"
+        "/budget — this month's budget used vs remaining (with % used), by category\n"
         "/history — total spending by day/week/month (this/last/next year or all time)\n"
         "/net — net income by month, income minus expenses (this/last/next year or all time)\n"
         "/checksheet — check for missing dates, missing categories, or new automated rows\n"
@@ -109,29 +109,38 @@ async def income_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+_SETBUDGET_PERCENTS = (10, 15, 20)
+
+
+def _setbudget_keyboard():
+    return InlineKeyboardMarkup(
+        [[InlineKeyboardButton(f"{p}%", callback_data=f"setbudget:{p}") for p in _SETBUDGET_PERCENTS]]
+    )
+
+
 async def setbudget_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not _authorized(update):
         return
+    await update.message.reply_text(
+        "Set this month's savings % — pick one (it stays in effect until you pick a new one):",
+        reply_markup=_setbudget_keyboard(),
+    )
 
-    usage = "Usage: /setbudget <save_percent>\ne.g. /setbudget 20"
-    if len(context.args) < 1:
-        await update.message.reply_text(usage)
+
+async def setbudget_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    if not _authorized(update):
+        await query.answer()
         return
 
-    try:
-        save_pct = float(context.args[0])
-    except ValueError:
-        await update.message.reply_text(f"Save percent must be a number.\n{usage}")
-        return
-
-    if not (0 <= save_pct <= 100):
-        await update.message.reply_text("Save percent must be between 0 and 100.")
-        return
+    await query.answer()
+    _, pct_str = query.data.split(":", 1)
+    save_pct = float(pct_str)
 
     today = today_local()
     state = set_budget(save_pct, today)
     if state is None:
-        await update.message.reply_text(
+        await query.message.reply_text(
             "No salary income found in the *in* sheet yet. Log it first, e.g. /income 3200 salary",
             parse_mode="Markdown",
         )
@@ -139,9 +148,9 @@ async def setbudget_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     chart = render_budget_chart(today)
     if chart:
-        await update.message.reply_photo(photo=chart)
+        await query.message.reply_photo(photo=chart)
     else:
-        await update.message.reply_text(build_no_budget_message())
+        await query.message.reply_text(build_no_budget_message())
 
 
 async def budget_command(update: Update, context: ContextTypes.DEFAULT_TYPE):

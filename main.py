@@ -34,6 +34,7 @@ from handlers import (
     net_callback,
     net_command,
     redack_callback,
+    setbudget_callback,
     setbudget_command,
     spending_callback,
     spending_command,
@@ -114,6 +115,7 @@ def main():
     app.add_handler(CallbackQueryHandler(avgspend_callback, pattern=r"^avgspend:"))
     app.add_handler(CallbackQueryHandler(catspend_category_callback, pattern=r"^catspendcat:"))
     app.add_handler(CallbackQueryHandler(catspend_period_callback, pattern=r"^catspendperiod:"))
+    app.add_handler(CallbackQueryHandler(setbudget_callback, pattern=r"^setbudget:"))
     app.add_handler(CallbackQueryHandler(history_granularity_callback, pattern=r"^histgran:"))
     app.add_handler(CallbackQueryHandler(history_year_callback, pattern=r"^histyear:"))
     app.add_handler(CallbackQueryHandler(net_callback, pattern=r"^net:"))

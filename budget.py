@@ -40,6 +40,12 @@ def _money(x: float) -> str:
     return f"-${abs(x):,.2f}" if x < 0 else f"${x:,.2f}"
 
 
+def _pct_used(used: float, budget: float) -> str:
+    if budget > 0:
+        return f"{used / budget * 100:.0f}%"
+    return "—" if used == 0 else "∞"
+
+
 def _add_months(d: date, delta: int) -> date:
     month_index = d.month - 1 + delta
     year = d.year + month_index // 12
@@ -128,8 +134,9 @@ def set_budget(save_pct: float, today: date):
     spend. Salary, allowance, and any non-salary income are looked up live
     every time the budget is displayed (see _live_totals) rather than frozen
     here, so a cashback logged mid-month immediately grows the available
-    budget. Returns the saved state, or None if no salary income has been
-    logged."""
+    budget. save_pct is also remembered as the standing preference (see
+    ensure_budget_for_month) so future months don't need it re-picked.
+    Returns the saved state, or None if no salary income has been logged."""
     salary_info = get_last_salary(today)
     if salary_info is None:
         return None
@@ -143,12 +150,28 @@ def set_budget(save_pct: float, today: date):
         "salary": salary,
         "salary_date": salary_date.isoformat(),
         "save_pct": save_pct,
+        "last_save_pct": save_pct,
         "allowance_target": allowance_target,
         "allowance_date": allowance_date.isoformat() if allowance_date else None,
         "category_pcts": _last_month_category_pcts(today),
     }
     _save(state)
     return state
+
+
+def ensure_budget_for_month(today: date):
+    """Returns this month's budget state, auto-carrying forward the last
+    picked save % into a fresh month if one hasn't been explicitly set yet.
+    The saved % stays in effect indefinitely until a new one is picked via
+    /setbudget. Returns None only if no save % has ever been picked (or
+    salary lookup fails), meaning there's truly nothing to show yet."""
+    state = _load()
+    if state.get("month") == today.strftime("%Y-%m"):
+        return state
+    last_pct = state.get("last_save_pct")
+    if last_pct is None:
+        return None
+    return set_budget(last_pct, today)
 
 
 def _live_totals(state: dict, today: date) -> dict:
@@ -186,8 +209,8 @@ def _month_usage(today: date) -> dict:
 
 def build_no_budget_message() -> str:
     return (
-        "📋 No budget set for this month yet.\n"
-        "Use /setbudget <save_percent> to set one, e.g. /setbudget 20\n"
+        "📋 No budget set yet.\n"
+        "Use /setbudget and pick a savings % (10/15/20) to set one.\n"
         "(the salary it budgets from is your last recorded salary income in the *in* sheet)"
     )
 
@@ -209,11 +232,12 @@ _GAP_BEFORE_FOOTER = 0.22
 _FOOTER_LINE_H = 0.26
 _MARGIN_BOTTOM = 0.25
 
-_FIG_W = 8.0
+_FIG_W = 8.8
 _COL_CAT_X = 0.35
-_COL_BUDGET_X = 4.6
-_COL_USED_X = 6.1
-_COL_LEFT_X = 7.65
+_COL_BUDGET_X = 4.5
+_COL_USED_X = 5.9
+_COL_PCT_X = 7.0
+_COL_LEFT_X = 8.45
 
 
 def _text(ax, x, y, s, **kwargs):
@@ -224,12 +248,12 @@ def _text(ax, x, y, s, **kwargs):
 
 
 def render_budget_chart(today: date):
-    """Image of budget vs. spent vs. remaining per category for the current
-    month — status-tinted rows for anything over/near budget, plus a wrapped
-    overspend callout at the bottom. None if no budget is set this month or
-    there's nothing to show."""
-    state = _load()
-    if state.get("month") != today.strftime("%Y-%m"):
+    """Image of budget vs. spent vs. remaining (and % used) per category for
+    the current month — status-tinted rows for anything over/near budget,
+    plus a wrapped overspend callout at the bottom. None if no save % has
+    ever been picked or there's nothing to show."""
+    state = ensure_budget_for_month(today)
+    if state is None:
         return None
 
     totals = _live_totals(state, today)
@@ -323,7 +347,8 @@ def render_budget_chart(today: date):
     y += _SUMMARY_H + _GAP_BEFORE_HEADER
 
     for x, label, ha in ((_COL_CAT_X, "Category", "left"), (_COL_BUDGET_X, "Budget", "right"),
-                         (_COL_USED_X, "Used", "right"), (_COL_LEFT_X, "Left", "right")):
+                         (_COL_USED_X, "Used", "right"), (_COL_PCT_X, "%", "right"),
+                         (_COL_LEFT_X, "Left", "right")):
         _text(ax, x, y, label, fontsize=8.5, fontweight="bold", color=_INK_SECONDARY, va="top", ha=ha)
     y += _COL_HEADER_H
     ax.plot([_COL_CAT_X, _FIG_W - _COL_CAT_X], [y, y], color=_GRIDLINE, linewidth=1)
@@ -344,6 +369,9 @@ def render_budget_chart(today: date):
                 color=_INK_SECONDARY, zorder=2)
         _text(ax, _COL_USED_X, text_y, f"${u:,.2f}", va="center", ha="right", fontsize=9.5,
                 color=_INK_PRIMARY, zorder=2)
+        _text(ax, _COL_PCT_X, text_y, _pct_used(u, b), va="center", ha="right", fontsize=9.5,
+                color=_STATUS_OVER_COLOR if remaining < 0 else _INK_SECONDARY,
+                fontweight="bold" if remaining < 0 else "normal", zorder=2)
         _text(ax, _COL_LEFT_X, text_y, _money(remaining), va="center", ha="right", fontsize=9.5,
                 color=_STATUS_OVER_COLOR if remaining < 0 else _INK_PRIMARY,
                 fontweight="bold" if remaining < 0 else "normal", zorder=2)
@@ -357,6 +385,8 @@ def render_budget_chart(today: date):
             fontweight="bold", color=_INK_PRIMARY)
     _text(ax, _COL_USED_X, text_y, f"${total_used:,.2f}", va="center", ha="right", fontsize=10,
             fontweight="bold", color=_INK_PRIMARY)
+    _text(ax, _COL_PCT_X, text_y, _pct_used(total_used, total_budget), va="center", ha="right", fontsize=10,
+            fontweight="bold", color=_STATUS_OVER_COLOR if total_remaining < 0 else _INK_PRIMARY)
     _text(ax, _COL_LEFT_X, text_y, _money(total_remaining), va="center", ha="right", fontsize=10, fontweight="bold",
             color=_STATUS_OVER_COLOR if total_remaining < 0 else _INK_PRIMARY)
     y += _TOTAL_H
