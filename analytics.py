@@ -245,9 +245,10 @@ _CATEGORY_CHART_GRANULARITY = {"w": "day", "m": "week", "y": "month"}
 def render_category_spend_chart(category: str, kind: str, today: date):
     """Bar chart of one category's spend within the to-date period (day
     bars for week, week bars for month, month bars for year). Each bar is
-    labeled with its $ amount and share of the period total; the title
-    carries the period total, transaction count, and average per
-    transaction. None if there's no data for this category in the period."""
+    labeled with its $ amount, share of the period total, and that bucket's
+    own average spend per transaction; the title carries the period total,
+    transaction count, and overall average per transaction. None if there's
+    no data for this category in the period."""
     start, end = period_bounds(kind, today)
     filtered = [e for e in fetch_expenses() if e["category"] == category and start <= e["date"] <= end]
     if not filtered:
@@ -259,7 +260,9 @@ def render_category_spend_chart(category: str, kind: str, today: date):
 
     buckets = _range_buckets(_CATEGORY_CHART_GRANULARITY[kind], start, end, spans_years=False)
     labels = [label for _, _, label in buckets]
-    values = [sum(e["price"] for e in filtered if b_start <= e["date"] <= b_end) for b_start, b_end, _ in buckets]
+    bucket_entries = [[e for e in filtered if b_start <= e["date"] <= b_end] for b_start, b_end, _ in buckets]
+    values = [sum(e["price"] for e in entries) for entries in bucket_entries]
+    counts = [len(entries) for entries in bucket_entries]
 
     color = _CATEGORY_COLOR.get(category, _OTHER_COLOR)
     many = len(labels) > 12
@@ -273,13 +276,17 @@ def render_category_spend_chart(category: str, kind: str, today: date):
 
     top = max(values) if values else 0
     if top:
-        ax.set_ylim(top=top * 1.25)
+        ax.set_ylim(top=top * 1.38)
 
-    for xi, v in zip(x, values):
+    for xi, v, n in zip(x, values, counts):
         if v > 0:
             pct = v / total * 100 if total else 0
+            bucket_avg = v / n
+            # Escaped '$' — matplotlib's mathtext parser treats a matched
+            # pair of literal '$' as a LaTeX math span, and this label has
+            # two.
             ax.annotate(
-                f"${v:,.2f}\n({pct:.0f}%)", (xi, v),
+                f"\\${v:,.2f} ({pct:.0f}%)\navg \\${bucket_avg:,.2f}", (xi, v),
                 textcoords="offset points", xytext=(0, 4), ha="center",
                 fontsize=7.5, color=_INK_PRIMARY,
             )
