@@ -98,13 +98,13 @@ def get_last_salary(today: date):
     return latest["amount"], latest["date"]
 
 
-def get_last_allowance(today: date):
-    """Most recent Allowance-category expense recorded before this month —
-    what was last given to parents, used as this month's target the same
-    way get_last_salary looks up income. Returns (amount, date), or None if
-    no Allowance expense has ever been logged."""
-    cutoff = today.replace(day=1)
-    allowance_entries = [e for e in fetch_expenses() if e["category"] == "Allowance" and e["date"] < cutoff]
+def get_last_allowance():
+    """The most recent Allowance-category expense logged in the out sheet,
+    full stop — unlike salary there's no month-end lag to account for, so
+    this just carries forward whatever was last given to parents, even if
+    it was logged earlier this same month. Returns (amount, date), or None
+    if no Allowance expense has ever been logged."""
+    allowance_entries = [e for e in fetch_expenses() if e["category"] == "Allowance"]
     if not allowance_entries:
         return None
     latest = max(allowance_entries, key=lambda e: e["date"])
@@ -135,7 +135,7 @@ def set_budget(save_pct: float, today: date):
         return None
     salary, salary_date = salary_info
 
-    allowance_info = get_last_allowance(today)
+    allowance_info = get_last_allowance()
     allowance_target, allowance_date = allowance_info if allowance_info else (0.0, None)
 
     state = {
