@@ -135,14 +135,14 @@ def _current_month_extra_income(today: date) -> float:
 
 
 def set_budget(save_pct: float, today: date):
-    """Persists this month's save percentage, allowance target, and category
-    split (as percentages, not dollar amounts) benchmarked off last month's
-    spend. Salary, allowance, and any non-salary income are looked up live
-    every time the budget is displayed (see _live_totals) rather than frozen
-    here, so a cashback logged mid-month immediately grows the available
-    budget. save_pct is also remembered as the standing preference (see
-    ensure_budget_for_month) so future months don't need it re-picked.
-    Returns the saved state, or None if no salary income has been logged."""
+    """Persists this month's save percentage and allowance target. Salary,
+    allowance, any non-salary income, and the last-month category split are
+    all looked up live every time the budget is displayed (see
+    _live_totals) rather than frozen here, so a cashback logged mid-month or
+    an expense backdated into last month immediately shows up. save_pct is
+    also remembered as the standing preference (see ensure_budget_for_month)
+    so future months don't need it re-picked. Returns the saved state, or
+    None if no salary income has been logged."""
     salary_info = get_last_salary(today)
     if salary_info is None:
         return None
@@ -159,7 +159,6 @@ def set_budget(save_pct: float, today: date):
         "last_save_pct": save_pct,
         "allowance_target": allowance_target,
         "allowance_date": allowance_date.isoformat() if allowance_date else None,
-        "category_pcts": _last_month_category_pcts(today),
     }
     _save(state)
     return state
@@ -185,14 +184,18 @@ def _live_totals(state: dict, today: date) -> dict:
     non-salary income so far), then derives the savings target, the
     allowance target (fixed at last month's given amount), the remaining
     discretionary spending budget, and per-category budgets from the stored
-    save % and split. Allowance is carved out up front like savings rather
-    than getting a proportional share, and always gets its own budget row."""
+    save % and a category split recomputed fresh from last month's expenses
+    every call — so a posthumously-logged expense for last month is picked
+    up immediately rather than only at the next /setbudget or month
+    rollover. Allowance is carved out up front like savings rather than
+    getting a proportional share, and always gets its own budget row."""
     extra_income = _current_month_extra_income(today)
     total_income = state["salary"] + extra_income
     savings_target = total_income * state["save_pct"] / 100
     allowance_target = state.get("allowance_target", 0.0)
     spending_budget = total_income - savings_target - allowance_target
-    category_budgets = {cat: spending_budget * pct for cat, pct in state["category_pcts"].items()}
+    category_pcts = _last_month_category_pcts(today)
+    category_budgets = {cat: spending_budget * pct for cat, pct in category_pcts.items()}
     category_budgets["Allowance"] = allowance_target
     return {
         "extra_income": extra_income,
