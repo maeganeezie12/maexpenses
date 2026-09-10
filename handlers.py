@@ -8,6 +8,7 @@ from telegram.ext import ContextTypes
 import sheets
 from analytics import (
     build_category_avg_table,
+    build_last_purchases_table,
     build_summary,
     has_investment_this_month,
     render_category_spend_chart,
@@ -58,6 +59,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Salary is your last recorded salary income in the *in* sheet, allowance to parents carries over from last "
         "month's Allowance expense, and the rest of the categories follow last month's spend split\n"
         "/budget — this month's budget used vs remaining (with % used), by category\n"
+        "/last — pick a category; last 10 purchases logged in it (date, item, amount)\n"
         "/history — total spending by day/week/month (this/last/next year or all time)\n"
         "/net — net income by month, income minus expenses (this/last/next year or all time)\n"
         "/checksheet — check for missing dates, missing categories, or new automated rows\n"
@@ -365,6 +367,30 @@ async def catspend_period_callback(update: Update, context: ContextTypes.DEFAULT
         await query.message.reply_photo(photo=chart)
     else:
         await query.message.reply_text(f"No {category} expenses logged for that period.")
+
+
+def _last_category_keyboard():
+    buttons = [InlineKeyboardButton(cat, callback_data=f"lastcat:{cat}") for cat in _CATEGORY_BUTTON_ORDER]
+    rows = [buttons[i : i + 3] for i in range(0, len(buttons), 3)]
+    return InlineKeyboardMarkup(rows)
+
+
+async def last_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not _authorized(update):
+        return
+    await update.message.reply_text("Last purchases — pick a category:", reply_markup=_last_category_keyboard())
+
+
+async def last_category_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    if not _authorized(update):
+        await query.answer()
+        return
+
+    await query.answer()
+    _, category = query.data.split(":", 1)
+    table = build_last_purchases_table(category)
+    await query.message.reply_text(table, parse_mode="Markdown")
 
 
 def _history_granularity_keyboard():

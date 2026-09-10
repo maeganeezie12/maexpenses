@@ -225,6 +225,37 @@ def build_category_avg_table(kind: str, today: date) -> str:
     return "\n".join(lines)
 
 
+def build_last_purchases_table(category: str, n: int = 10) -> str:
+    """Text table of the most recently *entered* purchases in this
+    category (sheet row order, not re-sorted by transaction date — so a
+    batch of posthumously backdated entries stays grouped together rather
+    than getting interleaved with older ones by date). If the cutoff would
+    split a day's entries in half, the rest of that day is included too,
+    even past n rows."""
+    filtered = [e for e in fetch_expenses() if e["category"] == category]
+    header_line = f"{CATEGORY_EMOJI.get(category, OTHER_EMOJI)} Last purchases — {category}"
+
+    if not filtered:
+        return f"{header_line}\n\nNo {category} expenses logged yet."
+
+    tail = filtered[-n:] if len(filtered) > n else filtered
+    start_idx = len(filtered) - len(tail)
+    boundary_date = filtered[start_idx]["date"]
+    while start_idx > 0 and filtered[start_idx - 1]["date"] == boundary_date:
+        start_idx -= 1
+    rows = filtered[start_idx:][::-1]  # most recently entered first
+
+    col_header = f"{'Date':<11}{'Item':<21}{'Amount':>11}"
+    lines = [header_line, "```", col_header, "-" * len(col_header)]
+    for e in rows:
+        item = e["item"] if len(e["item"]) <= 20 else e["item"][:19] + "…"
+        date_str = e["date"].strftime("%d %b %Y")
+        amount = f"${e['price']:,.2f}"
+        lines.append(f"{date_str:<11}{item:<21}{amount:>11}")
+    lines.append("```")
+    return "\n".join(lines)
+
+
 def _period_label(kind: str, start: date, end: date) -> str:
     if kind == "d":
         return end.strftime("%d %b %Y")
