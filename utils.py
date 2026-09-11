@@ -71,12 +71,16 @@ _DATE_PATTERNS = [
         lambda m, today: _safe_date(today.year, int(m.group(2)), int(m.group(1))),
     ),
     (
-        re.compile(r"\b(\d{1,2})(?:st|nd|rd|th)?\s+(" + _MONTH_PATTERN + r")\b"),
-        lambda m, today: _safe_date(today.year, _MONTHS[m.group(2)], int(m.group(1))),
+        # Trailing year must be a full 4 digits (unambiguous) — a bare 2-digit
+        # number here (e.g. "15 march 12 lunch") is far more likely to be the
+        # price than a year, unlike the slash formats where "/" makes a
+        # 2-digit year unambiguous.
+        re.compile(r"\b(\d{1,2})(?:st|nd|rd|th)?\s+(" + _MONTH_PATTERN + r")(?:\s+(\d{4}))?\b"),
+        lambda m, today: _safe_date(int(m.group(3)) if m.group(3) else today.year, _MONTHS[m.group(2)], int(m.group(1))),
     ),
     (
-        re.compile(r"\b(" + _MONTH_PATTERN + r")\s+(\d{1,2})(?:st|nd|rd|th)?\b"),
-        lambda m, today: _safe_date(today.year, _MONTHS[m.group(1)], int(m.group(2))),
+        re.compile(r"\b(" + _MONTH_PATTERN + r")\s+(\d{1,2})(?:st|nd|rd|th)?(?:\s+(\d{4}))?\b"),
+        lambda m, today: _safe_date(int(m.group(3)) if m.group(3) else today.year, _MONTHS[m.group(1)], int(m.group(2))),
     ),
 ]
 
