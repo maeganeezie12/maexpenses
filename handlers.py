@@ -20,6 +20,7 @@ from budget import build_no_budget_message, render_budget_chart, set_budget
 from config import ALLOWED_USER_ID, CATEGORIES, OUT_SHEET_NAME
 from integrity import run_daily_check
 from llm import parse_expense, parse_income
+from salary_reminder import acknowledge_salary_transfer, salary_transfer_due
 from utils import today_local
 
 logger = logging.getLogger(__name__)
@@ -67,7 +68,9 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/whoami — show your Telegram user ID\n"
         "/help — show this message\n\n"
         "Every Monday you'll also get an automatic recap of the week just finished, "
-        "and on the 25th a reminder if no Investment-category expense has been logged that month.",
+        "on the 25th a reminder if no Investment-category expense has been logged that month, "
+        "and from the 25th onward a daily reminder to transfer salary to DBS until you tap Done "
+        "(it then stays quiet for the rest of the month).",
         parse_mode="Markdown",
     )
 
@@ -472,6 +475,10 @@ def _red_row_keyboard(sheet: str, row: int):
     return InlineKeyboardMarkup([[InlineKeyboardButton("Acknowledge", callback_data=f"redack:{sheet}:{row}")]])
 
 
+def _salary_transfer_keyboard():
+    return InlineKeyboardMarkup([[InlineKeyboardButton("Done", callback_data="salarydone")]])
+
+
 async def _report_check_results(send_text):
     today = today_local()
     date_str = today.strftime("%d %b %Y")
@@ -503,7 +510,15 @@ async def _report_check_results(send_text):
         )
         investment_reminder_sent = True
 
-    return gap_rows, missing_category_rows, new_red_rows, investment_reminder_sent
+    salary_reminder_sent = False
+    if salary_transfer_due(today):
+        await send_text(
+            f"🏦 {date_str}: remember to transfer this month's salary to DBS.",
+            reply_markup=_salary_transfer_keyboard(),
+        )
+        salary_reminder_sent = True
+
+    return gap_rows, missing_category_rows, new_red_rows, investment_reminder_sent, salary_reminder_sent
 
 
 async def checksheet_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -513,8 +528,10 @@ async def checksheet_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
     async def send_text(text, reply_markup=None):
         await update.message.reply_text(text, reply_markup=reply_markup)
 
-    gap_rows, missing_category_rows, new_red_rows, investment_reminder_sent = await _report_check_results(send_text)
-    if not gap_rows and not missing_category_rows and not new_red_rows and not investment_reminder_sent:
+    gap_rows, missing_category_rows, new_red_rows, investment_reminder_sent, salary_reminder_sent = (
+        await _report_check_results(send_text)
+    )
+    if not any((gap_rows, missing_category_rows, new_red_rows, investment_reminder_sent, salary_reminder_sent)):
         date_str = today_local().strftime("%d %b %Y")
         await update.message.reply_text(f"All clear ({date_str}) — no missing dates, missing categories, or new automated rows.")
 
@@ -540,6 +557,17 @@ async def redack_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     sheets.set_row_black(sheet, row)
     await query.answer("Marked as reviewed")
     await query.edit_message_text(f"{query.message.text}\n\n✅ Acknowledged", reply_markup=None)
+
+
+async def salary_transfer_done_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    if not _authorized(update):
+        await query.answer()
+        return
+
+    acknowledge_salary_transfer(today_local())
+    await query.answer("Marked done — no more reminders this month")
+    await query.edit_message_text(f"{query.message.text}\n\n✅ Done", reply_markup=None)
 
 
 async def category_fix_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):

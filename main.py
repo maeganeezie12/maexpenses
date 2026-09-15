@@ -36,6 +36,7 @@ from handlers import (
     net_callback,
     net_command,
     redack_callback,
+    salary_transfer_done_callback,
     setbudget_callback,
     setbudget_command,
     spending_callback,
@@ -123,6 +124,7 @@ def main():
     app.add_handler(CallbackQueryHandler(history_year_callback, pattern=r"^histyear:"))
     app.add_handler(CallbackQueryHandler(net_callback, pattern=r"^net:"))
     app.add_handler(CallbackQueryHandler(last_category_callback, pattern=r"^lastcat:"))
+    app.add_handler(CallbackQueryHandler(salary_transfer_done_callback, pattern=r"^salarydone$"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, log_message))
 
     logger.info("Expense bot starting...")
