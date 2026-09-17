@@ -2,6 +2,7 @@ import json
 import logging
 import re
 from datetime import date as date_type
+from decimal import Decimal, DivisionByZero, InvalidOperation, ROUND_CEILING
 
 from google import genai
 from google.genai import types
@@ -83,6 +84,76 @@ def _fallback_category(item: str) -> str:
     return "Misc"
 
 
+# Chain of numbers joined by +, -, / (e.g. "100/3", "50+20-5") — division
+# binds tighter than +/- so "100/3+5" is (100/3)+5, matching normal maths.
+_ARITHMETIC_CHAIN = re.compile(r"\b\d+(?:\.\d+)?(?:\s*[+\-/]\s*\d+(?:\.\d+)?)+\b")
+_ARITHMETIC_TOKEN = re.compile(r"\d+(?:\.\d+)?|[+\-/]")
+
+
+def _eval_arithmetic(expr: str) -> Decimal:
+    tokens = _ARITHMETIC_TOKEN.findall(expr)
+    terms, signs = [], []
+    current = Decimal(tokens[0])
+    i = 1
+    while i < len(tokens):
+        op, num = tokens[i], Decimal(tokens[i + 1])
+        if op == "/":
+            current = current / num
+        else:
+            terms.append(current)
+            signs.append(op)
+            current = num
+        i += 2
+    terms.append(current)
+
+    total = terms[0]
+    for sign, term in zip(signs, terms[1:]):
+        total = total + term if sign == "+" else total - term
+    return total
+
+
+def _apply_arithmetic(text: str, today: date_type) -> str:
+    """Replaces a standalone +/-// amount expression with its computed
+    value, rounded UP to 2dp (e.g. "100/3 lunch" -> "33.34 lunch"), so
+    downstream price parsing (Gemini or the regex fallback) just sees a
+    plain number. A pure "/"-only chain of 2 or 3 whole numbers that also
+    parses as a valid DD/MM or DD/MM/YY(YY) date (e.g. "15/3" or
+    "12/3/2025") is left alone, since dates never use +/- and that's the
+    only real ambiguity with this feature."""
+    m = _ARITHMETIC_CHAIN.search(text)
+    if not m:
+        return text
+
+    expr = m.group()
+    parts = re.split(r"\s*[+\-/]\s*", expr)
+    ops = re.findall(r"[+\-/]", expr)
+
+    if all(op == "/" for op in ops) and len(parts) in (2, 3) and all("." not in p for p in parts):
+        try:
+            day, month = int(parts[0]), int(parts[1])
+            year = today.year
+            if len(parts) == 3:
+                year_str = parts[2]
+                if len(year_str) == 4:
+                    year = int(year_str)
+                elif len(year_str) == 2:
+                    year = 2000 + int(year_str)
+                else:
+                    year = None
+            if year is not None:
+                date_type(year, month, day)
+                return text  # looks like a DD/MM(/YY(YY)) date -- let extract_date handle it
+        except ValueError:
+            pass
+
+    try:
+        value = _eval_arithmetic(expr).quantize(Decimal("0.01"), rounding=ROUND_CEILING)
+    except (InvalidOperation, DivisionByZero, ZeroDivisionError, IndexError):
+        return text
+
+    return text[: m.start()] + str(value) + text[m.end() :]
+
+
 def _split_amount_and_text(text: str):
     match = re.search(r"[\d,]*\d(\.\d+)?", text)
     if not match:
@@ -116,7 +187,12 @@ async def parse_expense(text: str, today: date_type):
     user's raw text already names a fixed category explicitly, that always
     wins over whatever Gemini/fallback guessed (result["category_explicit"]
     tells the caller so it can skip the confirm-category keyboard).
+
+    A leading arithmetic amount (+, -, /, e.g. "100/3 lunch" to split a bill
+    three ways) is resolved to a plain number up front, rounded UP to 2dp,
+    before either parser sees the text.
     """
+    text = _apply_arithmetic(text, today)
     explicit_category = find_explicit_category(text)
 
     if _client:
