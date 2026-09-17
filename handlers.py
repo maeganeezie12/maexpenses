@@ -392,7 +392,7 @@ async def last_category_callback(update: Update, context: ContextTypes.DEFAULT_T
 
     await query.answer()
     _, category = query.data.split(":", 1)
-    table = build_last_purchases_table(category)
+    table = build_last_purchases_table(category, today_local())
     await query.message.reply_text(table, parse_mode="Markdown")
 
 

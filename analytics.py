@@ -225,16 +225,17 @@ def build_category_avg_table(kind: str, today: date) -> str:
     return "\n".join(lines)
 
 
-def build_last_purchases_table(category: str, n: int = 10) -> str:
+def build_last_purchases_table(category: str, today: date, n: int = 10) -> str:
     """Text table of the most recently *entered* purchases in this
-    category. Which rows to include is picked by sheet row order (entry
+    category, excluding anything dated after today (e.g. a mistaken future
+    date). Which rows to include is picked by sheet row order (entry
     order), not transaction date — so a batch of posthumously backdated
     entries stays grouped together rather than getting interleaved with
     older ones by date, and if the cutoff would split a day's entries in
     half, the rest of that day is included too, even past n rows. The
     selected rows are then displayed sorted by transaction date, newest
     first."""
-    filtered = [e for e in fetch_expenses() if e["category"] == category]
+    filtered = [e for e in fetch_expenses() if e["category"] == category and e["date"] <= today]
     header_line = f"{CATEGORY_EMOJI.get(category, OTHER_EMOJI)} Last purchases — {category}"
 
     if not filtered:
