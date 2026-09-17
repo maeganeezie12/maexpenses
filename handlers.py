@@ -43,7 +43,9 @@ def _category_keyboard(row: int):
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "Send me an expense like `3.9 lunch` and I'll log it to the *out* sheet.\n"
+        "Send me an expense like `3.9 lunch` and I'll log it to the *out* sheet "
+        "(the amount can also be an expression like `100/3 lunch` to split a bill — "
+        "+, -, / all work, division always rounds up to 2dp).\n"
         "Send /income 1221 salary to log income to the *in* sheet.\n\n"
         "Commands:\n"
         "/income — log income, e.g. /income 1221 salary (a bare number with no description defaults to salary)\n"
