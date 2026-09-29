@@ -2,6 +2,7 @@
 service_account.json
 last_entry.json
 seen_red_rows.json
+seen_yahoo_ids.json
 budget.json
 salary_reminder.json
 expense_bot.log

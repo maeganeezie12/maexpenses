@@ -97,6 +97,11 @@ def _most_recent_weekday(target: int, today):
     return today - timedelta(days=days_back)
 
 
+def month_number(name: str):
+    """'Sep' / 'September' (any case) -> 9, or None if not a recognized month name."""
+    return _MONTHS.get(name.lower())
+
+
 def extract_date(text: str, today):
     """Finds a date phrase anywhere in free text (deterministic, no LLM needed).
 

@@ -1,11 +1,13 @@
 import logging
 import re
+import uuid
 from datetime import timedelta
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto, Update
 from telegram.ext import ContextTypes
 
 import sheets
+import yahoo_watcher
 from analytics import (
     build_category_avg_table,
     build_last_purchases_table,
@@ -17,9 +19,9 @@ from analytics import (
     render_spending_by_month,
 )
 from budget import build_no_budget_message, render_budget_chart, set_budget
-from config import ALLOWED_USER_ID, CATEGORIES, OUT_SHEET_NAME
+from config import ALLOWED_USER_ID, CATEGORIES, EMAIL_TIMEOUT_SECONDS, OUT_SHEET_NAME
 from integrity import run_daily_check
-from llm import parse_expense, parse_income
+from llm import find_explicit_category, parse_expense, parse_income
 from salary_reminder import acknowledge_salary_transfer, salary_transfer_due
 from utils import today_local
 
@@ -170,11 +172,134 @@ async def budget_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(build_no_budget_message())
 
 
+def _email_category_keyboard(msg_id: str):
+    buttons = [InlineKeyboardButton(cat, callback_data=f"emailcat:{msg_id}:{cat}") for cat in _CATEGORY_BUTTON_ORDER]
+    rows = [buttons[i : i + 3] for i in range(0, len(buttons), 3)]
+    return InlineKeyboardMarkup(rows)
+
+
+def _pending_email_txns(context: ContextTypes.DEFAULT_TYPE) -> dict:
+    return context.bot_data.setdefault("pending_email_txns", {})
+
+
+async def _create_pending_email_txn(context: ContextTypes.DEFAULT_TYPE, txn: dict):
+    # A short synthetic id, not the email's own (Yahoo Message-ID headers run
+    # far longer than Telegram's 64-byte callback_data limit allows).
+    pending_id = uuid.uuid4().hex[:10]
+    text = f"💸 New outgoing transaction detected!\n{txn['item']} | ${txn['amount']:.2f}\nPick a category (or type to correct the description):"
+    message = await context.bot.send_message(
+        chat_id=ALLOWED_USER_ID, text=text, reply_markup=_email_category_keyboard(pending_id)
+    )
+    job = context.job_queue.run_once(
+        _email_timeout_job, EMAIL_TIMEOUT_SECONDS, data=pending_id, name=f"emailtimeout:{pending_id}"
+    )
+    _pending_email_txns(context)[pending_id] = {
+        "item": txn["item"],
+        "amount": txn["amount"],
+        "date": txn["date"],
+        "chat_id": message.chat_id,
+        "tg_message_id": message.message_id,
+        "timeout_job": job,
+    }
+
+
+async def _email_timeout_job(context: ContextTypes.DEFAULT_TYPE):
+    msg_id = context.job.data
+    pending = _pending_email_txns(context)
+    txn = pending.pop(msg_id, None)
+    if not txn:
+        return  # already resolved by a button press or text override
+
+    await context.bot.edit_message_text(
+        chat_id=txn["chat_id"],
+        message_id=txn["tg_message_id"],
+        text=f"⏱️ New outgoing transaction detected!\n{txn['item']} | ${txn['amount']:.2f}\n\nTimed out — not logged.",
+        reply_markup=None,
+    )
+
+
+async def email_poll_job(context: ContextTypes.DEFAULT_TYPE):
+    if not ALLOWED_USER_ID:
+        return
+
+    try:
+        alerts = yahoo_watcher.poll_alerts()
+    except Exception:
+        logger.exception("Yahoo Mail poll failed")
+        return
+
+    for event in alerts["paylah"]:
+        if event["type"] == "outgoing":
+            await _create_pending_email_txn(context, event)
+        elif event["type"] == "unparsed":
+            await context.bot.send_message(
+                chat_id=ALLOWED_USER_ID,
+                text=f"⚠️ Got a PayLah! alert email I couldn't parse — log it manually.\n{event['snippet']}",
+            )
+
+    for alert in alerts["paynow"]:
+        await context.bot.send_message(
+            chat_id=ALLOWED_USER_ID,
+            text=f"💰 Received ${alert['amount']:.2f} via PayNow from {alert['sender']}",
+        )
+
+
+async def email_category_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    if not _authorized(update):
+        await query.answer()
+        return
+
+    _, msg_id, category = query.data.split(":", 2)
+    pending = _pending_email_txns(context)
+    txn = pending.pop(msg_id, None)
+    if not txn:
+        await query.answer("Already handled")
+        return
+
+    if txn["timeout_job"]:
+        txn["timeout_job"].schedule_removal()
+    await query.answer(f"Logged as {category}")
+    row = sheets.append_expense(txn["date"], txn["item"], txn["amount"], category)
+    await query.edit_message_text(
+        f"Logged expense: {txn['date'].strftime('%d %b %Y')} | {txn['item']} | ${txn['amount']:.2f} | {category}",
+        reply_markup=None,
+    )
+
+
+async def _handle_email_override(update: Update, context: ContextTypes.DEFAULT_TYPE, msg_id: str, txn: dict, text: str):
+    if txn["timeout_job"]:
+        txn["timeout_job"].schedule_removal()
+        txn["timeout_job"] = None
+    txn["item"] = text
+    explicit_category = find_explicit_category(text)
+
+    if explicit_category:
+        _pending_email_txns(context).pop(msg_id, None)
+        sheets.append_expense(txn["date"], text, txn["amount"], explicit_category)
+        await update.message.reply_text(
+            f"Logged expense: {txn['date'].strftime('%d %b %Y')} | {text} | ${txn['amount']:.2f} | {explicit_category}"
+        )
+    else:
+        # Stays pending with no active timeout — she's engaged now, no need to expire it on her.
+        await update.message.reply_text(
+            f'Got it — description set to "{text}". Pick a category:',
+            reply_markup=_email_category_keyboard(msg_id),
+        )
+
+
 async def log_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not _authorized(update):
         return
 
     text = update.message.text.strip()
+
+    pending = _pending_email_txns(context)
+    if pending:
+        msg_id, txn = list(pending.items())[-1]  # most recently detected still-open one
+        await _handle_email_override(update, context, msg_id, txn, text)
+        return
+
     today = today_local()
 
     parsed = await parse_expense(text, today)

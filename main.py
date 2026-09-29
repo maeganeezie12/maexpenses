@@ -10,10 +10,13 @@ from config import (
     ALLOWED_USER_ID,
     DAILY_CHECK_HOUR,
     DAILY_CHECK_MINUTE,
+    EMAIL_POLL_INTERVAL_SECONDS,
     TIMEZONE,
     TOKEN,
     WEEKLY_SUMMARY_HOUR,
     WEEKLY_SUMMARY_MINUTE,
+    YAHOO_APP_PASSWORD,
+    YAHOO_EMAIL,
 )
 from handlers import (
     avgspend_callback,
@@ -25,6 +28,8 @@ from handlers import (
     catspend_period_callback,
     checksheet_command,
     daily_check_job,
+    email_category_callback,
+    email_poll_job,
     gsheet_command,
     history_command,
     history_granularity_callback,
@@ -89,6 +94,14 @@ async def post_init(application):
         "Weekly summary scheduled for Sundays %02d:%02d %s", WEEKLY_SUMMARY_HOUR, WEEKLY_SUMMARY_MINUTE, TIMEZONE
     )
 
+    if YAHOO_EMAIL and YAHOO_APP_PASSWORD:
+        application.job_queue.run_repeating(email_poll_job, interval=EMAIL_POLL_INTERVAL_SECONDS, first=10, name="email_poll")
+        logger.info("Email alert polling scheduled every %ds", EMAIL_POLL_INTERVAL_SECONDS)
+    else:
+        logger.warning(
+            "YAHOO_EMAIL/YAHOO_APP_PASSWORD not set in .env — PayLah!/PayNow email alerts are disabled."
+        )
+
 
 def main():
     app = ApplicationBuilder().token(TOKEN).post_init(post_init).build()
@@ -125,6 +138,7 @@ def main():
     app.add_handler(CallbackQueryHandler(net_callback, pattern=r"^net:"))
     app.add_handler(CallbackQueryHandler(last_category_callback, pattern=r"^lastcat:"))
     app.add_handler(CallbackQueryHandler(salary_transfer_done_callback, pattern=r"^salarydone$"))
+    app.add_handler(CallbackQueryHandler(email_category_callback, pattern=r"^emailcat:"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, log_message))
 
     logger.info("Expense bot starting...")

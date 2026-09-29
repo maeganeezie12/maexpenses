@@ -19,6 +19,16 @@ DAILY_CHECK_MINUTE = int(os.getenv("DAILY_CHECK_MINUTE") or "0")
 WEEKLY_SUMMARY_HOUR = int(os.getenv("WEEKLY_SUMMARY_HOUR") or "23")
 WEEKLY_SUMMARY_MINUTE = int(os.getenv("WEEKLY_SUMMARY_MINUTE") or "50")
 
+# PayLah! spend alerts + PayNow-received alerts, both via one Yahoo Mail
+# inbox (IMAP + app password — see .env.example)
+YAHOO_EMAIL = os.getenv("YAHOO_EMAIL")
+YAHOO_APP_PASSWORD = os.getenv("YAHOO_APP_PASSWORD")
+PAYLAH_SENDER = "paylah.alert@dbs.com"
+IBANKING_SENDER = "ibanking.alert@dbs.com"
+
+EMAIL_POLL_INTERVAL_SECONDS = int(os.getenv("EMAIL_POLL_INTERVAL_SECONDS") or "60")
+EMAIL_TIMEOUT_SECONDS = int(os.getenv("EMAIL_TIMEOUT_SECONDS") or "30")
+
 CATEGORIES = [
     "Travel",
     "Allowance",
